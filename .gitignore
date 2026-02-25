@@ -1,4 +1,19 @@
+### ArchLinuxPackages template
+*.tar
+*.tar.*
+*.jar
+*.exe
+*.msi
+*.zip
+*.tgz
+*.log
+*.log.*
+*.sig
+
+pkg/
+src/
+
+/venv/
 .idea/
-*.swp
-*.swo
-*~
+.claude/
+.DS_Store
