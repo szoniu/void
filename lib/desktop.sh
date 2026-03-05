@@ -9,6 +9,8 @@ desktop_install() {
     _install_gpu_drivers
     _install_kde_plasma
     _install_kde_apps
+    _install_bluetooth
+    _install_printing
 
     einfo "=== Desktop installation complete ==="
 }
@@ -159,4 +161,24 @@ _install_kde_apps() {
     done
 
     einfo "KDE applications installed"
+}
+
+# _install_bluetooth — Install Bluetooth support (auto when hardware detected)
+_install_bluetooth() {
+    if [[ "${BLUETOOTH_DETECTED:-0}" != "1" ]]; then
+        return 0
+    fi
+
+    einfo "Installing Bluetooth support..."
+    try "Installing bluez" xbps-install -y bluez
+    _enable_service "bluetoothd"
+    einfo "Bluetooth support installed"
+}
+
+# _install_printing — Install printing support (CUPS)
+_install_printing() {
+    einfo "Installing printing support..."
+    try "Installing CUPS" xbps-install -y cups cups-filters
+    _enable_service "cupsd"
+    einfo "Printing support installed"
 }

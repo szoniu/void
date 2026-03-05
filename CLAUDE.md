@@ -23,10 +23,10 @@ lib/                    — Library modules (NEVER execute directly)
 ├── constants.sh        — Global constants, paths, CONFIG_VARS[], CHECKPOINTS[]
 ├── logging.sh          — elog/einfo/ewarn/eerror/die/die_trace, colors, log to file
 ├── utils.sh            — try (interactive recovery, text fallback without dialog, LIVE_OUTPUT via tee), checkpoint_set/reached/validate/migrate_to_target, is_root/is_efi/has_network/ensure_dns, generate_password_hash, try_resume_from_disk, infer_config_from_partition
-├── dialog.sh           — Wrapper dialog/whiptail, primitives (msgbox/yesno/menu/radiolist/checklist/gauge/infobox/inputbox/passwordbox), wizard runner (register_wizard_screens + run_wizard)
-├── config.sh           — config_save/load/set/get/dump/diff (${VAR@Q} quoting)
-├── hardware.sh         — detect_cpu/gpu/disks/esp/installed_oses, serialize/deserialize_detected_oses, get_hardware_summary (no CPU_MARCH — Void uses binary packages)
-├── disk.sh             — Two-phase: disk_plan_add/add_stdin/show/auto/dualboot → cleanup_target_disk + disk_execute_plan (sfdisk), mount/unmount_filesystems, get_uuid/get_partuuid
+├── dialog.sh           — Wrapper gum/dialog/whiptail, primitives (msgbox/yesno/menu/radiolist/checklist/gauge/infobox/inputbox/passwordbox), wizard runner (register_wizard_screens + run_wizard), bundled gum extraction
+├── config.sh           — config_save/load/set/get/dump/diff (${VAR@Q} quoting), validate_config()
+├── hardware.sh         — detect_cpu/gpu(multi-GPU/hybrid)/disks/esp/installed_oses, detect_asus_rog, detect_bluetooth/fingerprint/thunderbolt/sensors/webcam/wwan, serialize/deserialize_detected_oses, get_hardware_summary
+├── disk.sh             — Two-phase: disk_plan_add/add_stdin/show/auto/dualboot → cleanup_target_disk + disk_execute_plan (sfdisk), mount/unmount_filesystems, get_uuid/get_partuuid, shrink helpers (disk_plan_shrink)
 ├── network.sh          — check_network, install_network_manager, select_fastest_mirror
 ├── rootfs.sh           — rootfs_get_url/download/verify/extract (_find_rootfs_file for resume)
 ├── xbps.sh             — xbps_configure_mirror/nonfree, xbps_update (base-voidstrap → base-system swap), xbps_install_base, install_extra_packages
@@ -43,24 +43,25 @@ tui/                    — TUI screens
 ├── welcome.sh          — screen_welcome: branding + prereq check
 ├── preset_load.sh      — screen_preset_load: skip/file/browse
 ├── hw_detect.sh        — screen_hw_detect: detect_all_hardware + summary (infobox auto-advance)
-├── disk_select.sh      — screen_disk_select: disk + scheme (auto/dual-boot/manual)
+├── disk_select.sh      — screen_disk_select: disk + scheme (auto/dual-boot/manual) + _shrink_wizard()
 ├── filesystem_select.sh — screen_filesystem_select: ext4/btrfs/xfs + btrfs subvolumes
 ├── swap_config.sh      — screen_swap_config: zram/partition/file/none
 ├── network_config.sh   — screen_network_config: hostname + mirror
 ├── locale_config.sh    — screen_locale_config: timezone + locale + keymap
 ├── kernel_select.sh    — screen_kernel_select: mainline/lts
-├── gpu_config.sh       — screen_gpu_config: auto/nvidia/amd/intel/none + nvidia-open
+├── gpu_config.sh       — screen_gpu_config: auto/nvidia/amd/intel/none + nvidia-open + hybrid GPU display
 ├── desktop_config.sh   — screen_desktop_config: KDE apps checklist
 ├── user_config.sh      — screen_user_config: root pwd, user, groups
-├── extra_packages.sh   — screen_extra_packages: checklist (fastfetch, btop, kitty) + freeform text
+├── extra_packages.sh   — screen_extra_packages: checklist (fastfetch, btop, kitty + conditional hw items) + freeform text
 ├── preset_save.sh      — screen_preset_save: optional export
-├── summary.sh          — screen_summary: full summary + "YES" + countdown
+├── summary.sh          — screen_summary: validate_config + full summary + "YES" + countdown
 └── progress.sh         — screen_progress: resume detection + infobox (short phases) + live terminal (chroot)
 
-data/                   — Static databases
-├── gpu_database.sh     — nvidia_generation(), get_gpu_recommendation()
+data/                   — Static databases + bundled assets
+├── gpu_database.sh     — nvidia_generation(), get_gpu_recommendation(), get_hybrid_gpu_recommendation()
 ├── mirrors.sh          — VOID_MIRRORS[], get_mirror_list_for_dialog()
-└── dialogrc            — Dark TUI theme (loaded by DIALOGRC in init_dialog)
+├── dialogrc            — Dark TUI theme (loaded by DIALOGRC in init_dialog)
+└── gum.tar.gz          — Bundled gum v0.17.0 binary (static ELF x86-64, ~4.5 MB)
 
 presets/                — Example configurations
 tests/                  — Tests (bash, standalone)
@@ -113,6 +114,26 @@ All config variables are defined in `CONFIG_VARS[]` in `lib/constants.sh`:
 | `WINDOWS_DETECTED` | 0/1 | Auto-detected Windows installation |
 | `LINUX_DETECTED` | 0/1 | Auto-detected Linux installation |
 | `DETECTED_OSES_SERIALIZED` | serialized map | partition=OS name pairs |
+| `HYBRID_GPU` | yes/no | Hybrid iGPU+dGPU detected |
+| `IGPU_VENDOR` | intel/amd | Integrated GPU vendor |
+| `IGPU_DEVICE_NAME` | string | Integrated GPU name |
+| `DGPU_VENDOR` | nvidia/amd | Discrete GPU vendor |
+| `DGPU_DEVICE_NAME` | string | Discrete GPU name |
+| `ASUS_ROG_DETECTED` | 0/1 | ASUS ROG/TUF laptop detected |
+| `ENABLE_ASUSCTL` | yes/no | Install asusctl (ROG) |
+| `BLUETOOTH_DETECTED` | 0/1 | Bluetooth hardware detected |
+| `FINGERPRINT_DETECTED` | 0/1 | Fingerprint reader detected |
+| `ENABLE_FINGERPRINT` | yes/no | fprintd enabled (opt-in) |
+| `THUNDERBOLT_DETECTED` | 0/1 | Thunderbolt controller detected |
+| `ENABLE_THUNDERBOLT` | yes/no | bolt enabled (opt-in) |
+| `SENSORS_DETECTED` | 0/1 | IIO sensors detected |
+| `ENABLE_SENSORS` | yes/no | iio-sensor-proxy enabled (opt-in) |
+| `WEBCAM_DETECTED` | 0/1 | Webcam detected |
+| `WWAN_DETECTED` | 0/1 | WWAN/LTE modem detected |
+| `ENABLE_WWAN` | yes/no | ModemManager enabled (opt-in) |
+| `SHRINK_PARTITION` | /dev/sdXN | Partition to shrink (dual-boot) |
+| `SHRINK_PARTITION_FSTYPE` | ntfs/ext4/btrfs | Filesystem of partition to shrink |
+| `SHRINK_NEW_SIZE_MIB` | integer | New size after shrink (MiB) |
 
 ### Void-specific patterns
 
@@ -253,6 +274,52 @@ Two modes of operation:
 
 When `dialog` is not available (e.g. inside fresh chroot), `try()` uses a simple text menu: `(r)etry | (s)hell | (c)ontinue | (a)bort`.
 
+### gum TUI backend
+
+Third TUI backend alongside `dialog` and `whiptail`. Static binary bundled in repo as `data/gum.tar.gz` (gum v0.17.0, ~4.5 MB). Zero network dependencies.
+
+- `_extract_bundled_gum()` extracts to `/tmp/void-installer-gum/gum`, verifies `gum --version`
+- Detection priority: gum > dialog > whiptail. Opt-out: `GUM_BACKEND=0`
+- Desc→tag mapping via parallel arrays (gum 0.17.0 `--label-delimiter` is broken)
+- Phantom ESC detection: `EPOCHREALTIME` with 150ms threshold, 3 retries then text fallback
+- Terminal response handling: `COLORFGBG="15;0"`, `stty -echo`, `_gum_drain_tty()`
+
+### Hybrid GPU & ASUS ROG detection
+
+`detect_gpu()` scans ALL GPUs from `lspci -nn` (not just `head -1`). Classification:
+- NVIDIA = always dGPU; Intel = always iGPU; AMD — if NVIDIA also present then iGPU, otherwise single
+- PCI slot heuristic: bus `00` = iGPU, `01+` = dGPU
+- When 2 GPUs: `HYBRID_GPU=yes`, `IGPU_*`, `DGPU_*` set, `GPU_VENDOR`=dGPU vendor
+- `GPU_DRIVER` via `get_hybrid_gpu_recommendation()` in `data/gpu_database.sh`
+
+ASUS ROG detection: `detect_asus_rog()` — DMI sysfs. Sets `ASUS_ROG_DETECTED=0/1`.
+
+### Peripheral detection
+
+6 detection functions in `lib/hardware.sh`, called from `detect_all_hardware()`:
+- `detect_bluetooth()` — `/sys/class/bluetooth/hci*`
+- `detect_fingerprint()` — USB vendor IDs (06cb, 27c6, 147e, 138a, 04f3)
+- `detect_thunderbolt()` — sysfs + lspci
+- `detect_sensors()` — IIO sysfs
+- `detect_webcam()` — `/sys/class/video4linux/video*/name`
+- `detect_wwan()` — `lspci -nnd 8086:7360`
+
+Opt-in in `tui/extra_packages.sh` checklist (visible only when detected):
+- Fingerprint → fprintd, Thunderbolt → bolt, IIO sensors → iio-sensor-proxy, WWAN → ModemManager
+- Bluetooth → auto-installed with desktop (`_install_bluetooth()` in `lib/desktop.sh`)
+
+### Partition shrink wizard
+
+When dual-boot selected and not enough free space, `_shrink_wizard()` in `tui/disk_select.sh` offers to shrink an existing partition:
+- Supported: NTFS (ntfsresize), ext4 (resize2fs), btrfs (btrfs filesystem resize)
+- Safety: 1 GiB margin, minimum VOID_MIN_SIZE_MIB (10 GiB)
+- Helpers in `lib/disk.sh`: `disk_get_free_space_mib()`, `disk_get_partition_size_mib()`, `disk_get_partition_used_mib()`, `disk_can_shrink_fstype()`, `disk_plan_shrink()`
+
+### Config validation
+
+`validate_config()` in `lib/config.sh` — validates config BEFORE install. Called at entry to `screen_summary()`.
+Checks: required variables, enum values (KERNEL_TYPE ∈ {mainline, lts}, FILESYSTEM ∈ {ext4, btrfs, xfs}), hostname RFC 1123, block device existence, cross-field consistency.
+
 ## Running tests
 
 ```bash
@@ -263,6 +330,9 @@ bash tests/test_checkpoint.sh    # Checkpoint validate + migrate
 bash tests/test_resume.sh        # Resume from disk scanning + recovery
 bash tests/test_multiboot.sh     # Multi-boot OS detection + serialization
 bash tests/test_infer_config.sh  # Config inference from installed system
+bash tests/test_hybrid_gpu.sh    # Hybrid GPU + ASUS ROG + recommendation
+bash tests/test_validate.sh      # Config validation before install
+bash tests/test_peripherals.sh   # Peripheral detection, config vars, inference
 ```
 
 All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`.
@@ -288,7 +358,9 @@ All tests are standalone — they do not require root or hardware. They use `DRY
 - **`eval` on external data**: Do not use `eval "${line}"` on `blkid` output or config files. A malicious partition label can contain code. Parse via `case`/`read` or `declare`.
 - **`try_resume_from_disk()` returns 0/1/2, not boolean**: 0 = config + checkpoints, 1 = only checkpoints, 2 = nothing. Testing: `_RESUME_TEST_DIR` switches to fake directories instead of real mount. Do not use `if try_resume_from_disk` — always `rc=0; try_resume_from_disk || rc=$?; case ${rc}`.
 - **DNS on Live ISO**: Live ISO may not have DNS configured. `ensure_dns()` in preflight automatically adds `8.8.8.8` if ping by IP works but by name does not.
-- **Dialog theme**: `data/dialogrc` loaded by `export DIALOGRC=` in `init_dialog()`. Whiptail ignores DIALOGRC.
+- **Dialog theme**: `data/dialogrc` loaded by `export DIALOGRC=` in `init_dialog()`. Whiptail ignores DIALOGRC. Gum uses `GUM_CHOOSE_*`/`GUM_INPUT_*` env vars.
+- **gum TUI backend**: `data/gum.tar.gz` extracted by `_extract_bundled_gum()` to `/tmp/void-installer-gum/`. Opt-out: `GUM_BACKEND=0`. Priority: gum > dialog > whiptail.
+- **Phantom ESC in gum**: gum/termenv sends OSC 11 (background color query) and CPR. `COLORFGBG="15;0"` suppresses OSC 11. `EPOCHREALTIME` with 150ms threshold detects phantom ESC from terminal responses vs real user ESC.
 - **`ROOTFS_FILE` unbound on resume**: When the `rootfs_download` checkpoint survived but the phase is skipped, `ROOTFS_FILE` is not set. `rootfs_verify()`/`rootfs_extract()` use `_find_rootfs_file()` for fallback — searches for `void-x86_64-ROOTFS-*.tar.xz` on `MOUNTPOINT`.
 - **Passwords/hashes NEVER in command arguments**: `openssl passwd -6 "${password}"` and `usermod -p "${hash}"` are visible in `ps aux`. Use: `openssl passwd -6 -stdin <<< "${password}"` and `bash -c 'echo "user:$1" | chpasswd -e' -- "${hash}"`.
 - **`eval echo "~${user}"` leads to injection**: Use `getent passwd "${user}" | cut -d: -f6` instead.

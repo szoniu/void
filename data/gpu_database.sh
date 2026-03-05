@@ -88,3 +88,18 @@ get_gpu_recommendation() {
             ;;
     esac
 }
+
+# get_hybrid_gpu_recommendation — Get driver packages for hybrid GPU setups
+# Usage: get_hybrid_gpu_recommendation <igpu_vendor> <dgpu_vendor>
+# Prints: description of driver combination
+get_hybrid_gpu_recommendation() {
+    local igpu="$1" dgpu="$2"
+
+    case "${igpu}+${dgpu}" in
+        intel+nvidia)   echo "mesa-dri + nvidia" ;;
+        amd+nvidia)     echo "mesa-dri + nvidia" ;;
+        intel+amd)      echo "mesa-dri" ;;
+        amd+amd)        echo "mesa-dri" ;;
+        *)              echo "mesa-dri" ;;
+    esac
+}

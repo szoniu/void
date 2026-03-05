@@ -1,6 +1,7 @@
 ### ArchLinuxPackages template
 *.tar
 *.tar.*
+!data/gum.tar.gz
 *.jar
 *.exe
 *.msi

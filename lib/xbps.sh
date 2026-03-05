@@ -89,3 +89,43 @@ install_extra_packages() {
 
     einfo "Extra packages installed"
 }
+
+# install_fingerprint_tools — Install fingerprint reader support
+install_fingerprint_tools() {
+    if [[ "${ENABLE_FINGERPRINT:-no}" != "yes" ]]; then
+        return 0
+    fi
+    einfo "Installing fingerprint reader support..."
+    try "Installing fprintd" xbps-install -y fprintd libfprint
+    einfo "Fingerprint support installed"
+}
+
+# install_thunderbolt_tools — Install Thunderbolt device manager
+install_thunderbolt_tools() {
+    if [[ "${ENABLE_THUNDERBOLT:-no}" != "yes" ]]; then
+        return 0
+    fi
+    einfo "Installing Thunderbolt support..."
+    try "Installing bolt" xbps-install -y bolt
+    einfo "Thunderbolt support installed"
+}
+
+# install_sensor_tools — Install IIO sensor proxy
+install_sensor_tools() {
+    if [[ "${ENABLE_SENSORS:-no}" != "yes" ]]; then
+        return 0
+    fi
+    einfo "Installing IIO sensor support..."
+    try "Installing iio-sensor-proxy" xbps-install -y iio-sensor-proxy
+    einfo "IIO sensor support installed"
+}
+
+# install_wwan_tools — Install WWAN/LTE modem support
+install_wwan_tools() {
+    if [[ "${ENABLE_WWAN:-no}" != "yes" ]]; then
+        return 0
+    fi
+    einfo "Installing WWAN/LTE support..."
+    try "Installing ModemManager" xbps-install -y ModemManager libmbim libqmi
+    einfo "WWAN/LTE support installed"
+}

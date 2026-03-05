@@ -115,12 +115,173 @@ disk_plan_auto() {
     einfo "Auto-partition plan generated for ${disk}"
 }
 
+# --- Shrink helpers ---
+
+# disk_get_free_space_mib — Get total free (unallocated) space on disk in MiB
+# Returns 0 MiB if no free space or on error
+disk_get_free_space_mib() {
+    local disk="$1"
+
+    if [[ "${DRY_RUN:-0}" == "1" ]]; then
+        echo "${_DRY_RUN_FREE_SPACE_MIB:-0}"
+        return 0
+    fi
+
+    local sectors sector_size total_free_sectors=0
+    sector_size=$(blockdev --getss "${disk}" 2>/dev/null) || sector_size=512
+
+    while IFS= read -r line; do
+        local s
+        s=$(echo "${line}" | awk 'NF>=3 && $3 ~ /^[0-9]+$/ {print $3}') || true
+        if [[ -n "${s}" ]]; then
+            (( total_free_sectors += s )) || true
+        fi
+    done < <(sfdisk --list-free "${disk}" 2>/dev/null)
+
+    echo $(( total_free_sectors * sector_size / 1024 / 1024 ))
+}
+
+# disk_get_partition_size_mib — Get partition size in MiB
+disk_get_partition_size_mib() {
+    local part="$1"
+
+    if [[ "${DRY_RUN:-0}" == "1" ]]; then
+        echo "${_DRY_RUN_PART_SIZE_MIB:-0}"
+        return 0
+    fi
+
+    local bytes
+    bytes=$(lsblk -bno SIZE "${part}" 2>/dev/null | head -1) || bytes=0
+    echo $(( bytes / 1024 / 1024 ))
+}
+
+# disk_get_partition_used_mib — Get used space on partition in MiB
+# Supports ntfs, ext4, btrfs. Returns 0 on error or unsupported.
+disk_get_partition_used_mib() {
+    local part="$1" fstype="$2"
+
+    if [[ "${DRY_RUN:-0}" == "1" ]]; then
+        echo "${_DRY_RUN_PART_USED_MIB:-0}"
+        return 0
+    fi
+
+    case "${fstype}" in
+        ntfs)
+            local info
+            info=$(ntfsresize --info --force --no-action "${part}" 2>/dev/null) || { echo 0; return 0; }
+            local bytes
+            bytes=$(echo "${info}" | sed -n 's/.*resize at \([0-9]*\) bytes.*/\1/p' | head -1) || true
+            if [[ -n "${bytes}" ]]; then
+                echo $(( bytes / 1024 / 1024 ))
+            else
+                echo 0
+            fi
+            ;;
+        ext4)
+            local dump
+            dump=$(dumpe2fs -h "${part}" 2>/dev/null) || { echo 0; return 0; }
+            local block_count free_blocks block_size
+            block_count=$(echo "${dump}" | sed -n 's/^Block count:[[:space:]]*//p' | head -1) || true
+            free_blocks=$(echo "${dump}" | sed -n 's/^Free blocks:[[:space:]]*//p' | head -1) || true
+            block_size=$(echo "${dump}" | sed -n 's/^Block size:[[:space:]]*//p' | head -1) || true
+            if [[ -n "${block_count}" && -n "${free_blocks}" && -n "${block_size}" ]]; then
+                echo $(( (block_count - free_blocks) * block_size / 1024 / 1024 ))
+            else
+                echo 0
+            fi
+            ;;
+        btrfs)
+            local tmpdir
+            tmpdir=$(mktemp -d) || { echo 0; return 0; }
+            if mount -o ro "${part}" "${tmpdir}" 2>/dev/null; then
+                local used_bytes
+                used_bytes=$(btrfs filesystem usage -b "${tmpdir}" 2>/dev/null \
+                    | sed -n 's/^[[:space:]]*Used:[[:space:]]*//p' | head -1) || true
+                umount "${tmpdir}" 2>/dev/null || true
+                rmdir "${tmpdir}" 2>/dev/null || true
+                if [[ -n "${used_bytes}" ]]; then
+                    echo $(( used_bytes / 1024 / 1024 ))
+                else
+                    echo 0
+                fi
+            else
+                rmdir "${tmpdir}" 2>/dev/null || true
+                echo 0
+            fi
+            ;;
+        *)
+            echo 0
+            ;;
+    esac
+}
+
+# disk_can_shrink_fstype — Check if filesystem type can be shrunk
+# Returns 0 (true) for ntfs/ext4/btrfs, 1 (false) otherwise
+disk_can_shrink_fstype() {
+    local fstype="$1"
+    case "${fstype}" in
+        ntfs|ext4|btrfs) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# disk_plan_shrink — Add shrink actions to DISK_ACTIONS[]
+# Requires: SHRINK_PARTITION, SHRINK_PARTITION_FSTYPE, SHRINK_NEW_SIZE_MIB
+disk_plan_shrink() {
+    local part="${SHRINK_PARTITION}"
+    local fstype="${SHRINK_PARTITION_FSTYPE}"
+    local new_size="${SHRINK_NEW_SIZE_MIB}"
+    local disk="${TARGET_DISK}"
+
+    # Determine partition number from device path
+    local part_num
+    part_num=$(echo "${part}" | sed 's/.*[^0-9]\([0-9]*\)$/\1/') || true
+
+    if [[ -z "${part_num}" ]]; then
+        eerror "Cannot determine partition number from ${part}"
+        return 1
+    fi
+
+    einfo "Planning shrink: ${part} (${fstype}) -> ${new_size} MiB"
+
+    case "${fstype}" in
+        ntfs)
+            disk_plan_add "Shrink NTFS filesystem on ${part}" \
+                ntfsresize --force --size "${new_size}M" "${part}"
+            ;;
+        ext4)
+            disk_plan_add "Check ext4 filesystem on ${part}" \
+                e2fsck -f -y "${part}"
+            disk_plan_add "Shrink ext4 filesystem on ${part}" \
+                resize2fs "${part}" "${new_size}M"
+            ;;
+        btrfs)
+            disk_plan_add "Shrink btrfs filesystem on ${part}" \
+                bash -c "mount ${part} /mnt/void-shrink-tmp && btrfs filesystem resize ${new_size}M /mnt/void-shrink-tmp && umount /mnt/void-shrink-tmp"
+            ;;
+    esac
+
+    # Resize partition table entry
+    disk_plan_add_stdin "Resize partition table entry ${part_num} on ${disk}" \
+        ",${new_size}MiB"$'\n' \
+        sfdisk --force --no-reread -N "${part_num}" "${disk}"
+
+    # Re-read partition table
+    disk_plan_add "Re-read partition table on ${disk}" \
+        partprobe "${disk}"
+}
+
 # disk_plan_dualboot — Generate dual-boot partitioning plan
 disk_plan_dualboot() {
     local disk="${TARGET_DISK}"
     local fs="${FILESYSTEM:-ext4}"
 
     disk_plan_reset
+
+    # Shrink existing partition first if requested
+    if [[ -n "${SHRINK_PARTITION:-}" ]]; then
+        disk_plan_shrink
+    fi
 
     # ESP is reused, never formatted
     einfo "Reusing existing ESP: ${ESP_PARTITION}"

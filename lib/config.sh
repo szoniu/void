@@ -128,3 +128,110 @@ config_diff() {
         <(sort "${file1}" | grep -v '^#' | grep -v '^$') \
         <(sort "${file2}" | grep -v '^#' | grep -v '^$') || true
 }
+
+# validate_config — Check configuration consistency before installation
+# Prints error messages to stdout. Returns 0 if valid, 1 if errors found.
+validate_config() {
+    local -a errors=()
+
+    # --- Required variables (must be non-empty) ---
+    local -a required=(
+        TARGET_DISK FILESYSTEM HOSTNAME TIMEZONE LOCALE
+        KERNEL_TYPE GPU_VENDOR USERNAME ROOT_PASSWORD_HASH USER_PASSWORD_HASH
+    )
+    local var
+    for var in "${required[@]}"; do
+        if [[ -z "${!var:-}" ]]; then
+            errors+=("${var} is required but not set")
+        fi
+    done
+
+    # --- Enum validation (only check if non-empty) ---
+    if [[ -n "${PARTITION_SCHEME:-}" ]] && \
+       [[ "${PARTITION_SCHEME}" != "auto" && "${PARTITION_SCHEME}" != "dual-boot" && "${PARTITION_SCHEME}" != "manual" ]]; then
+        errors+=("PARTITION_SCHEME='${PARTITION_SCHEME}' — must be auto, dual-boot, or manual")
+    fi
+
+    if [[ -n "${FILESYSTEM:-}" ]] && \
+       [[ "${FILESYSTEM}" != "ext4" && "${FILESYSTEM}" != "btrfs" && "${FILESYSTEM}" != "xfs" ]]; then
+        errors+=("FILESYSTEM='${FILESYSTEM}' — must be ext4, btrfs, or xfs")
+    fi
+
+    if [[ -n "${SWAP_TYPE:-}" ]] && \
+       [[ "${SWAP_TYPE}" != "zram" && "${SWAP_TYPE}" != "partition" && "${SWAP_TYPE}" != "file" && "${SWAP_TYPE}" != "none" ]]; then
+        errors+=("SWAP_TYPE='${SWAP_TYPE}' — must be zram, partition, file, or none")
+    fi
+
+    if [[ -n "${KERNEL_TYPE:-}" ]] && \
+       [[ "${KERNEL_TYPE}" != "mainline" && "${KERNEL_TYPE}" != "lts" ]]; then
+        errors+=("KERNEL_TYPE='${KERNEL_TYPE}' — must be mainline or lts")
+    fi
+
+    if [[ -n "${GPU_VENDOR:-}" ]] && \
+       [[ "${GPU_VENDOR}" != "nvidia" && "${GPU_VENDOR}" != "amd" && "${GPU_VENDOR}" != "intel" && "${GPU_VENDOR}" != "none" && "${GPU_VENDOR}" != "unknown" ]]; then
+        errors+=("GPU_VENDOR='${GPU_VENDOR}' — must be nvidia, amd, intel, none, or unknown")
+    fi
+
+    # --- Format validation ---
+    # Hostname: RFC 1123
+    if [[ -n "${HOSTNAME:-}" ]] && \
+       [[ ! "${HOSTNAME}" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$ ]]; then
+        errors+=("HOSTNAME='${HOSTNAME}' — invalid (RFC 1123: alphanumeric + hyphens, 1-63 chars)")
+    fi
+
+    # Locale: xx_XX.UTF-8
+    if [[ -n "${LOCALE:-}" ]] && \
+       [[ ! "${LOCALE}" =~ ^[a-z]{2}_[A-Z]{2}\.UTF-8$ ]]; then
+        errors+=("LOCALE='${LOCALE}' — must match xx_XX.UTF-8 format")
+    fi
+
+    # --- Block device checks (skip in DRY_RUN) ---
+    if [[ "${DRY_RUN:-0}" != "1" ]]; then
+        if [[ -n "${TARGET_DISK:-}" && "${PARTITION_SCHEME:-auto}" != "manual" ]] && \
+           [[ ! -b "${TARGET_DISK}" ]]; then
+            errors+=("TARGET_DISK='${TARGET_DISK}' — block device does not exist")
+        fi
+
+        if [[ "${PARTITION_SCHEME:-}" == "dual-boot" && "${ESP_REUSE:-no}" == "yes" ]] && \
+           [[ -n "${ESP_PARTITION:-}" && ! -b "${ESP_PARTITION}" ]]; then
+            errors+=("ESP_PARTITION='${ESP_PARTITION}' — block device does not exist")
+        fi
+
+        if [[ "${PARTITION_SCHEME:-}" == "dual-boot" ]] && \
+           [[ -n "${ROOT_PARTITION:-}" && ! -b "${ROOT_PARTITION}" ]]; then
+            errors+=("ROOT_PARTITION='${ROOT_PARTITION}' — block device does not exist")
+        fi
+    fi
+
+    # --- Cross-field logic ---
+    if [[ "${SWAP_TYPE:-}" == "partition" ]] && \
+       [[ -z "${SWAP_SIZE_MIB:-}" || "${SWAP_SIZE_MIB:-0}" -le 0 ]]; then
+        errors+=("SWAP_TYPE=partition requires SWAP_SIZE_MIB > 0")
+    fi
+
+    if [[ "${PARTITION_SCHEME:-}" == "dual-boot" ]] && \
+       [[ -z "${ESP_PARTITION:-}" ]]; then
+        errors+=("PARTITION_SCHEME=dual-boot requires ESP_PARTITION to be set")
+    fi
+
+    if [[ -n "${SHRINK_PARTITION:-}" ]]; then
+        if [[ -n "${SHRINK_PARTITION_FSTYPE:-}" ]] && \
+           [[ "${SHRINK_PARTITION_FSTYPE}" != "ntfs" && "${SHRINK_PARTITION_FSTYPE}" != "ext4" && "${SHRINK_PARTITION_FSTYPE}" != "btrfs" ]]; then
+            errors+=("SHRINK_PARTITION_FSTYPE='${SHRINK_PARTITION_FSTYPE}' — must be ntfs, ext4, or btrfs")
+        fi
+        if [[ -z "${SHRINK_NEW_SIZE_MIB:-}" || "${SHRINK_NEW_SIZE_MIB:-0}" -le 0 ]]; then
+            errors+=("SHRINK_PARTITION set requires SHRINK_NEW_SIZE_MIB > 0")
+        fi
+    fi
+
+    # --- Output ---
+    if [[ ${#errors[@]} -gt 0 ]]; then
+        local err
+        for err in "${errors[@]}"; do
+            echo "- ${err}"
+        done
+        return 1
+    fi
+
+    return 0
+}

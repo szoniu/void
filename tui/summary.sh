@@ -3,6 +3,14 @@
 source "${LIB_DIR}/protection.sh"
 
 screen_summary() {
+    # Validate configuration before showing summary
+    local validation_errors
+    validation_errors=$(validate_config) || {
+        dialog_msgbox "Configuration Errors" \
+            "Fix these issues before proceeding:\n\n${validation_errors}"
+        return "${TUI_BACK}"
+    }
+
     local summary=""
     summary+="=== Installation Summary ===\n\n"
     summary+="Init system:  runit\n"
@@ -21,13 +29,27 @@ screen_summary() {
     summary+="Keymap:       ${KEYMAP:-us}\n"
     summary+="\n"
     summary+="Kernel:       ${KERNEL_TYPE:-mainline}\n"
-    summary+="GPU:          ${GPU_VENDOR:-unknown} (${GPU_DRIVER:-auto})\n"
+    if [[ "${HYBRID_GPU:-no}" == "yes" ]]; then
+        summary+="GPU:          ${IGPU_VENDOR:-?} + ${DGPU_DEVICE_NAME:-?} (PRIME)\n"
+    else
+        summary+="GPU:          ${GPU_VENDOR:-unknown} (${GPU_DRIVER:-auto})\n"
+    fi
     summary+="Nonfree repo: ${ENABLE_NONFREE:-no}\n"
+    [[ "${ASUS_ROG_DETECTED:-0}" == "1" ]] && summary+="ASUS ROG:     detected\n"
+    [[ "${ENABLE_ASUSCTL:-no}" == "yes" ]] && summary+="ROG tools:    asusctl enabled\n"
+    [[ "${ENABLE_FINGERPRINT:-no}" == "yes" ]] && summary+="Fingerprint:  fprintd enabled\n"
+    [[ "${ENABLE_THUNDERBOLT:-no}" == "yes" ]] && summary+="Thunderbolt:  bolt enabled\n"
+    [[ "${ENABLE_SENSORS:-no}" == "yes" ]] && summary+="IIO sensors:  iio-sensor-proxy enabled\n"
+    [[ "${ENABLE_WWAN:-no}" == "yes" ]] && summary+="WWAN LTE:     ModemManager enabled\n"
     summary+="\n"
     summary+="Username:     ${USERNAME:-user}\n"
     summary+="Desktop:      KDE Plasma + SDDM + PipeWire\n"
     [[ -n "${DESKTOP_EXTRAS:-}" ]] && summary+="KDE apps:     ${DESKTOP_EXTRAS}\n"
     [[ -n "${EXTRA_PACKAGES:-}" ]] && summary+="Extra pkgs:   ${EXTRA_PACKAGES}\n"
+
+    if [[ -n "${SHRINK_PARTITION:-}" ]]; then
+        summary+="Shrink:       ${SHRINK_PARTITION} (${SHRINK_PARTITION_FSTYPE:-?}) -> ${SHRINK_NEW_SIZE_MIB:-?} MiB\n"
+    fi
 
     if [[ "${ESP_REUSE:-no}" == "yes" ]]; then
         summary+="\nDual-boot:    YES (reusing ESP ${ESP_PARTITION:-?})\n"
@@ -72,7 +94,16 @@ screen_summary() {
 
         # What WILL be formatted
         warning+="WILL BE FORMATTED (data destroyed):\n"
-        warning+="  ${ROOT_PARTITION:-?} -> ${FILESYSTEM:-ext4}\n\n"
+        if [[ -n "${ROOT_PARTITION:-}" ]]; then
+            warning+="  ${ROOT_PARTITION} -> ${FILESYSTEM:-ext4}\n"
+        else
+            warning+="  (new partition will be created) -> ${FILESYSTEM:-ext4}\n"
+        fi
+        if [[ -n "${SHRINK_PARTITION:-}" ]]; then
+            warning+="WILL BE SHRUNK (data preserved):\n"
+            warning+="  ${SHRINK_PARTITION} (${SHRINK_PARTITION_FSTYPE:-?}) -> ${SHRINK_NEW_SIZE_MIB:-?} MiB\n"
+        fi
+        warning+="\n"
 
         # What will SURVIVE
         warning+="WILL BE PRESERVED:\n"
