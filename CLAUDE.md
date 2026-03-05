@@ -330,9 +330,6 @@ bash tests/test_checkpoint.sh    # Checkpoint validate + migrate
 bash tests/test_resume.sh        # Resume from disk scanning + recovery
 bash tests/test_multiboot.sh     # Multi-boot OS detection + serialization
 bash tests/test_infer_config.sh  # Config inference from installed system
-bash tests/test_hybrid_gpu.sh    # Hybrid GPU + ASUS ROG + recommendation
-bash tests/test_validate.sh      # Config validation before install
-bash tests/test_peripherals.sh   # Peripheral detection, config vars, inference
 ```
 
 All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`.
