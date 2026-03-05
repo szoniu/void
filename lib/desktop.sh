@@ -19,15 +19,29 @@ desktop_install() {
 _install_gpu_drivers() {
     local gpu="${GPU_VENDOR:-}"
 
+    # Hybrid GPU: install iGPU drivers first, then dGPU drivers
+    if [[ "${HYBRID_GPU:-no}" == "yes" ]]; then
+        case "${IGPU_VENDOR:-}" in
+            intel) _install_intel_drivers ;;
+            amd)   _install_amd_drivers ;;
+        esac
+    fi
+
     case "${gpu}" in
         nvidia)
             _install_nvidia_drivers
             ;;
         amd)
-            _install_amd_drivers
+            # Skip if already installed as iGPU above
+            if [[ "${HYBRID_GPU:-no}" != "yes" || "${IGPU_VENDOR:-}" != "amd" ]]; then
+                _install_amd_drivers
+            fi
             ;;
         intel)
-            _install_intel_drivers
+            # Skip if already installed as iGPU above
+            if [[ "${HYBRID_GPU:-no}" != "yes" || "${IGPU_VENDOR:-}" != "intel" ]]; then
+                _install_intel_drivers
+            fi
             ;;
         none|"")
             einfo "No GPU drivers selected"
@@ -48,7 +62,11 @@ _install_nvidia_drivers() {
         try "Syncing nonfree repo" xbps-install -S
     fi
 
-    try "Installing NVIDIA drivers" xbps-install -y nvidia
+    if [[ "${GPU_USE_NVIDIA_OPEN:-no}" == "yes" ]]; then
+        try "Installing NVIDIA open drivers" xbps-install -y nvidia nvidia-open-dkms
+    else
+        try "Installing NVIDIA drivers" xbps-install -y nvidia
+    fi
 
     # Load nvidia modules at boot
     mkdir -p /etc/modules-load.d
@@ -155,7 +173,7 @@ _install_kde_apps() {
             krita)         try "Installing ${app}" xbps-install -y krita ;;
             kdenlive)      try "Installing ${app}" xbps-install -y kdenlive ;;
             obs-studio)    try "Installing ${app}" xbps-install -y obs ;;
-            vscode)        try "Installing ${app}" xbps-install -y vscode ;;
+            vscode)        ewarn "vscode is not available in Void repos — skipping (install manually or use flatpak)" ;;
             *)             try "Installing ${app}" xbps-install -y "${app}" ;;
         esac
     done

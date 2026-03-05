@@ -204,9 +204,9 @@ validate_config() {
     fi
 
     # --- Cross-field logic ---
-    if [[ "${SWAP_TYPE:-}" == "partition" ]] && \
+    if [[ "${SWAP_TYPE:-}" == "file" ]] && \
        [[ -z "${SWAP_SIZE_MIB:-}" || "${SWAP_SIZE_MIB:-0}" -le 0 ]]; then
-        errors+=("SWAP_TYPE=partition requires SWAP_SIZE_MIB > 0")
+        errors+=("SWAP_TYPE=file requires SWAP_SIZE_MIB > 0")
     fi
 
     if [[ "${PARTITION_SCHEME:-}" == "dual-boot" ]] && \

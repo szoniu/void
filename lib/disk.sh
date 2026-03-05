@@ -257,7 +257,7 @@ disk_plan_shrink() {
             ;;
         btrfs)
             disk_plan_add "Shrink btrfs filesystem on ${part}" \
-                bash -c "mount ${part} /mnt/void-shrink-tmp && btrfs filesystem resize ${new_size}M /mnt/void-shrink-tmp && umount /mnt/void-shrink-tmp"
+                bash -c "mkdir -p /mnt/void-shrink-tmp && mount ${part} /mnt/void-shrink-tmp && btrfs filesystem resize ${new_size}M /mnt/void-shrink-tmp && umount /mnt/void-shrink-tmp"
             ;;
     esac
 
@@ -479,7 +479,7 @@ mount_filesystems() {
     fi
 
     # Mount ESP
-    local esp_mount="${MOUNTPOINT}/efi"
+    local esp_mount="${MOUNTPOINT}/boot/efi"
     mkdir -p "${esp_mount}"
     try "Mounting ESP" mount "${ESP_PARTITION}" "${esp_mount}"
 
@@ -507,7 +507,7 @@ unmount_filesystems() {
 
     # Unmount in reverse order — find all mounts under MOUNTPOINT
     local -a mounts
-    readarray -t mounts < <(awk -v mp="${MOUNTPOINT}" '$3 == mp || $3 ~ "^"mp"/" {print $3}' /proc/mounts 2>/dev/null | sort -r)
+    readarray -t mounts < <(awk -v mp="${MOUNTPOINT}" '$2 == mp || $2 ~ "^"mp"/" {print $2}' /proc/mounts 2>/dev/null | sort -r)
 
     local mnt
     for mnt in "${mounts[@]}"; do

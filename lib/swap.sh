@@ -49,8 +49,8 @@ _setup_swap_partition() {
     einfo "Enabling swap partition: ${swap_part}"
 
     if [[ "${DRY_RUN:-0}" != "1" ]]; then
-        mkswap "${swap_part}" >> "${LOG_FILE}" 2>&1 || true
-        swapon "${swap_part}" >> "${LOG_FILE}" 2>&1 || true
+        try "Formatting swap partition" mkswap "${swap_part}"
+        try "Activating swap partition" swapon "${swap_part}"
     fi
 
     einfo "Swap partition enabled"
@@ -69,11 +69,13 @@ _setup_swap_file() {
             try "Creating btrfs swap file" \
                 btrfs filesystem mkswapfile --size "${size_mib}m" "${swap_file}"
         else
+            install -m 0600 /dev/null "${swap_file}"
             try "Allocating swap file" \
                 dd if=/dev/zero of="${swap_file}" bs=1M count="${size_mib}" status=progress
-            chmod 0600 "${swap_file}"
             try "Formatting swap file" mkswap "${swap_file}"
         fi
+
+        try "Activating swap file" swapon "${swap_file}"
 
         # Add to fstab
         echo "${swap_file}    none    swap    sw    0 0" >> /etc/fstab

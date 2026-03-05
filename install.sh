@@ -67,6 +67,9 @@ source "${DATA_DIR}/mirrors.sh"
 cleanup() {
     local rc=$?
 
+    # Restore terminal echo (gum backend may disable it)
+    stty echo </dev/tty 2>/dev/null || true
+
     # Restore stderr if it was redirected to log file (fd 4 saved by screen_progress)
     if { true >&4; } 2>/dev/null; then
         exec 2>&4
@@ -139,6 +142,9 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --config)
+            if [[ $# -lt 2 ]]; then
+                die "--config requires a file argument"
+            fi
             CONFIG_FILE="$2"
             shift 2
             ;;
@@ -193,88 +199,6 @@ run_configuration_wizard() {
 
     config_save "${CONFIG_FILE}"
     einfo "Configuration complete. Saved to ${CONFIG_FILE}"
-}
-
-# run_pre_chroot — Execute pre-chroot installation phases
-run_pre_chroot() {
-    einfo "=== Pre-chroot installation ==="
-
-    maybe_exec 'before_install'
-
-    # Phase 1: Preflight
-    if ! checkpoint_reached "preflight"; then
-        einfo "--- Phase: Preflight checks ---"
-        maybe_exec 'before_preflight'
-        preflight_checks
-        maybe_exec 'after_preflight'
-        checkpoint_set "preflight"
-    else
-        einfo "Skipping preflight (checkpoint reached)"
-    fi
-
-    # Phase 2: Disk operations
-    if ! checkpoint_reached "disks"; then
-        einfo "--- Phase: Disk operations ---"
-        maybe_exec 'before_disks'
-        disk_execute_plan
-        mount_filesystems
-        checkpoint_migrate_to_target
-        maybe_exec 'after_disks'
-        checkpoint_set "disks"
-    else
-        einfo "Skipping disks (checkpoint reached)"
-        mount_filesystems
-        checkpoint_migrate_to_target
-    fi
-
-    # Phase 3: ROOTFS download, verify, extract
-    if ! checkpoint_reached "rootfs_extract"; then
-        einfo "--- Phase: ROOTFS download and extraction ---"
-        maybe_exec 'before_rootfs'
-
-        if ! checkpoint_reached "rootfs_download"; then
-            rootfs_download
-            checkpoint_set "rootfs_download"
-        else
-            einfo "Skipping rootfs download (checkpoint reached)"
-        fi
-
-        if ! checkpoint_reached "rootfs_verify"; then
-            rootfs_verify
-            checkpoint_set "rootfs_verify"
-        else
-            einfo "Skipping rootfs verify (checkpoint reached)"
-        fi
-
-        rootfs_extract
-        maybe_exec 'after_rootfs'
-        checkpoint_set "rootfs_extract"
-    else
-        einfo "Skipping rootfs (checkpoint reached)"
-    fi
-
-    # Phase 4: XBPS preconfig
-    if ! checkpoint_reached "xbps_preconfig"; then
-        einfo "--- Phase: XBPS pre-configuration ---"
-        maybe_exec 'before_xbps_preconfig'
-        xbps_configure_mirror
-        xbps_configure_nonfree
-        copy_dns_info
-        copy_installer_to_chroot
-        maybe_exec 'after_xbps_preconfig'
-        checkpoint_set "xbps_preconfig"
-    else
-        einfo "Skipping xbps preconfig (checkpoint reached)"
-    fi
-
-    # Enter chroot and run chroot phase
-    einfo "=== Entering chroot ==="
-    chroot_setup
-    run_chroot_phase
-    chroot_teardown
-    einfo "=== Chroot phase complete ==="
-
-    maybe_exec 'after_install'
 }
 
 # run_chroot_phase — Execute inside chroot (re-invoked by install.sh __chroot_phase)
@@ -402,6 +326,11 @@ _do_chroot_phases() {
         maybe_exec 'before_extras'
         xbps_install_base
         install_extra_packages
+        install_fingerprint_tools
+        install_thunderbolt_tools
+        install_sensor_tools
+        install_wwan_tools
+        install_asusctl_tools
         maybe_exec 'after_extras'
         checkpoint_set "extras"
     else
@@ -428,12 +357,6 @@ run_post_install() {
 
     # Unmount everything
     unmount_filesystems
-
-    dialog_msgbox "Installation Complete" \
-        "Void Linux has been successfully installed!\n\n\
-You can now reboot into your new system.\n\n\
-Remember to remove the installation media.\n\n\
-Log file saved to: ${LOG_FILE}"
 
     if dialog_yesno "Reboot" "Would you like to reboot now?"; then
         einfo "Rebooting..."

@@ -140,7 +140,7 @@ infer_config_from_partition "/dev/sda2" "btrfs" || rc=$?
 
 assert_eq "Return code 0 (sufficient)" "0" "${rc}"
 assert_eq "FILESYSTEM btrfs" "btrfs" "${FILESYSTEM:-}"
-assert_eq "BTRFS_SUBVOLUMES" "yes" "${BTRFS_SUBVOLUMES:-}"
+assert_eq "BTRFS_SUBVOLUMES" "@:/:@home:/home" "${BTRFS_SUBVOLUMES:-}"
 
 rm -rf "${_RESUME_TEST_DIR}"
 
@@ -384,37 +384,13 @@ UUID=bbbb-2222  /          ext4  defaults  0 1
 UUID=aaaa-1111  /boot/efi  vfat  defaults  0 2
 FSTAB
 
-touch "${local_root}/var/db/xbps/.linux-mainline-6.9.0_1.x86_64.plist"
+touch "${local_root}/var/db/xbps/.linux-6.9.0_1.x86_64.plist"
 
 rc=0
 infer_config_from_partition "/dev/sda2" "ext4" || rc=$?
 assert_eq "KERNEL_TYPE mainline" "mainline" "${KERNEL_TYPE:-}"
 
 rm -rf "${_RESUME_TEST_DIR}"
-
-# Default kernel (linux6.6-*)
-clear_config_vars
-export _RESUME_TEST_DIR="$(mktemp -d)"
-export _INFER_UUID_MAP="${_RESUME_TEST_DIR}/uuid_map"
-
-local_root="${_RESUME_TEST_DIR}/mnt/sda2"
-mkdir -p "${local_root}/etc" "${local_root}/var/db/xbps"
-
-cat > "${_RESUME_TEST_DIR}/uuid_map" <<'MAP'
-aaaa-1111 /dev/sda1
-bbbb-2222 /dev/sda2
-MAP
-
-cat > "${local_root}/etc/fstab" <<'FSTAB'
-UUID=bbbb-2222  /          ext4  defaults  0 1
-UUID=aaaa-1111  /boot/efi  vfat  defaults  0 2
-FSTAB
-
-touch "${local_root}/var/db/xbps/.linux6.6-6.6.44_1.x86_64.plist"
-
-rc=0
-infer_config_from_partition "/dev/sda2" "ext4" || rc=$?
-assert_eq "KERNEL_TYPE default" "default" "${KERNEL_TYPE:-}"
 
 rm -rf "${_RESUME_TEST_DIR}"
 
@@ -520,7 +496,7 @@ FSTAB
 
 rc=0
 infer_config_from_partition "/dev/sda2" "ext4" || rc=$?
-assert_eq "Sufficient with just fstab (no INIT_SYSTEM needed)" "0" "${rc}"
+assert_eq "Sufficient with just fstab (Void always uses runit)" "0" "${rc}"
 
 rm -rf "${_RESUME_TEST_DIR}"
 
@@ -682,7 +658,7 @@ LOCALE
 
 echo "repository=https://repo-default.voidlinux.org/current" > "${local_root}/etc/xbps.d/00-repository-main.conf"
 
-touch "${local_root}/var/db/xbps/.linux-mainline-6.9.0_1.x86_64.plist"
+touch "${local_root}/var/db/xbps/.linux-6.9.0_1.x86_64.plist"
 
 rc=0
 infer_config_from_partition "/dev/sda2" "xfs" || rc=$?

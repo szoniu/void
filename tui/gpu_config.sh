@@ -12,7 +12,7 @@ screen_gpu_config() {
         info_text+="Hybrid GPU detected:\n"
         info_text+="  iGPU: ${IGPU_DEVICE_NAME:-unknown} (${IGPU_VENDOR:-unknown})\n"
         info_text+="  dGPU: ${DGPU_DEVICE_NAME:-unknown} (${DGPU_VENDOR:-unknown})\n\n"
-        info_text+="PRIME render offload: use 'prime-run' for dGPU\n"
+        info_text+="PRIME render offload: use environment variables for dGPU\n"
         if [[ "${GPU_USE_NVIDIA_OPEN:-no}" == "yes" ]]; then
             info_text+="NVIDIA open kernel module: supported (Turing+)\n"
         fi
@@ -31,7 +31,7 @@ screen_gpu_config() {
                 info_text+="Recommended: mesa-dri (AMDGPU, open source)\n"
                 ;;
             intel)
-                info_text+="Recommended: mesa-dri + intel-media-driver\n"
+                info_text+="Recommended: mesa-dri + intel-video-accel\n"
                 ;;
             *)
                 info_text+="No specific GPU driver detected.\n"

@@ -55,7 +55,7 @@ assert_eq "Turing doesn't prefer open kernel" "no" "${result}"
 echo ""
 echo "=== Test: GPU Recommendation (Void packages — 2-field output) ==="
 
-# NVIDIA → "nvidia|use_open" (no VIDEO_CARDS in Void)
+# NVIDIA → "nvidia|use_open"
 rec=$(get_gpu_recommendation "10de" "2704")
 assert_eq "NVIDIA recommendation" "nvidia|yes" "${rec}"
 

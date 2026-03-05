@@ -99,22 +99,40 @@ preset_compare() {
     local file="$1"
     local -A preset_vals=()
 
-    # Read preset values
-    while IFS='=' read -r key value; do
-        [[ "${key}" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "${key}" ]] && continue
-        key="${key%%[[:space:]]*}"
-        preset_vals["${key}"]="${value}"
+    # Source preset into a subshell to get unquoted values
+    local safe_file
+    safe_file=$(mktemp "${TMPDIR:-/tmp}/void-preset-cmp.XXXXXX")
+
+    # Filter to known vars only (same logic as config_load)
+    local line var_name
+    while IFS= read -r line; do
+        [[ "${line}" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line}" || "${line}" =~ ^[[:space:]]*$ ]] && continue
+        [[ "${line}" =~ ^#! ]] && continue
+        var_name="${line%%=*}"
+        var_name="${var_name%%[[:space:]]*}"
+        local found=0
+        local known_var
+        for known_var in "${CONFIG_VARS[@]}"; do
+            [[ "${var_name}" == "${known_var}" ]] && { found=1; break; }
+        done
+        [[ ${found} -eq 1 ]] && echo "${line}" >> "${safe_file}"
     done < "${file}"
 
-    # Compare
+    # Source to get unquoted values, then compare
     local var
-    for var in "${CONFIG_VARS[@]}"; do
-        local current="${!var:-}"
-        local preset="${preset_vals[${var}]:-}"
-
-        if [[ "${current}" != "${preset}" ]]; then
-            echo "DIFF: ${var}: preset='${preset}' current='${current}'"
+    (
+        # shellcheck disable=SC1090
+        source "${safe_file}" 2>/dev/null
+        for var in "${CONFIG_VARS[@]}"; do
+            echo "${var}=${!var:-}"
+        done
+    ) | while IFS='=' read -r key value; do
+        local current="${!key:-}"
+        if [[ "${current}" != "${value}" ]]; then
+            echo "DIFF: ${key}: preset='${value}' current='${current}'"
         fi
     done
+
+    rm -f "${safe_file}"
 }

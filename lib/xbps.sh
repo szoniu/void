@@ -107,6 +107,7 @@ install_thunderbolt_tools() {
     fi
     einfo "Installing Thunderbolt support..."
     try "Installing bolt" xbps-install -y bolt
+    _enable_service "boltd"
     einfo "Thunderbolt support installed"
 }
 
@@ -127,5 +128,17 @@ install_wwan_tools() {
     fi
     einfo "Installing WWAN/LTE support..."
     try "Installing ModemManager" xbps-install -y ModemManager libmbim libqmi
+    _enable_service "ModemManager"
     einfo "WWAN/LTE support installed"
+}
+
+# install_asusctl_tools — Install ASUS ROG tools
+install_asusctl_tools() {
+    if [[ "${ENABLE_ASUSCTL:-no}" != "yes" ]]; then
+        return 0
+    fi
+    einfo "Installing ASUS ROG tools..."
+    try "Installing asusctl" xbps-install -y asusctl
+    _enable_service "asusd"
+    einfo "ASUS ROG tools installed"
 }

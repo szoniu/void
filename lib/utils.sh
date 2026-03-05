@@ -512,8 +512,15 @@ _infer_from_fstab() {
                     btrfs)
                         FILESYSTEM="btrfs"
                         export FILESYSTEM
-                        if [[ "${opts}" =~ subvol= ]]; then
-                            BTRFS_SUBVOLUMES="yes"
+                        # Collect btrfs subvolume mappings from fstab
+                        if [[ "${opts}" =~ subvol=([^,]+) ]]; then
+                            local _subvol="${BASH_REMATCH[1]}"
+                            local _mpt="${mpoint}"
+                            if [[ -z "${BTRFS_SUBVOLUMES:-}" ]]; then
+                                BTRFS_SUBVOLUMES="${_subvol}:${_mpt}"
+                            else
+                                BTRFS_SUBVOLUMES="${BTRFS_SUBVOLUMES}:${_subvol}:${_mpt}"
+                            fi
                             export BTRFS_SUBVOLUMES
                         fi
                         ;;
@@ -526,6 +533,15 @@ _infer_from_fstab() {
                 fi
                 ;;
         esac
+
+        # Collect btrfs subvolume mappings for non-root mount points
+        if [[ "${fstype}" == "btrfs" && "${mpoint}" != "/" && "${opts}" =~ subvol=([^,]+) ]]; then
+            local _subvol="${BASH_REMATCH[1]}"
+            if [[ -n "${BTRFS_SUBVOLUMES:-}" ]]; then
+                BTRFS_SUBVOLUMES="${BTRFS_SUBVOLUMES}:${_subvol}:${mpoint}"
+                export BTRFS_SUBVOLUMES
+            fi
+        fi
 
         # Swap detection by fstype
         if [[ "${fstype}" == "swap" && -n "${dev}" && ! "${dev}" =~ ^UUID= ]]; then
@@ -716,16 +732,10 @@ _infer_kernel_type() {
         return 0
     fi
 
-    # Check for linux-mainline package
-    if ls "${pkgdb}"/.linux-mainline-* &>/dev/null 2>&1; then
+    # Check for default linux package (e.g. .linux-6.x.y_1.x86_64.plist)
+    # Void's mainline kernel package is "linux" (no "mainline" suffix)
+    if ls "${pkgdb}"/.linux-[0-9]* &>/dev/null 2>&1; then
         KERNEL_TYPE="mainline"
-        export KERNEL_TYPE
-        return 0
-    fi
-
-    # Check for default linux package (e.g. .linux6.6-6.6.XXX_1.x86_64.plist or .linux-*)
-    if ls "${pkgdb}"/.linux[0-9]* &>/dev/null 2>&1 || ls "${pkgdb}"/.linux-[0-9]* &>/dev/null 2>&1; then
-        KERNEL_TYPE="default"
         export KERNEL_TYPE
         return 0
     fi
@@ -879,5 +889,5 @@ get_cpu_count() {
 generate_password_hash() {
     local password="$1"
     openssl passwd -6 -stdin <<< "${password}" 2>/dev/null || \
-    VOID_PW="${password}" python3 -c "import crypt, os; print(crypt.crypt(os.environ['VOID_PW'], crypt.mksalt(crypt.METHOD_SHA512)))" 2>/dev/null
+    VOID_PW="${password}" python3 -c "import hashlib, os, base64; pw=os.environ['VOID_PW'].encode(); salt=os.urandom(16); h=hashlib.sha512(salt+pw).digest(); print('\$6\$'+base64.b64encode(salt).decode()[:16]+'\$'+base64.b64encode(h).decode()[:86])" 2>/dev/null
 }

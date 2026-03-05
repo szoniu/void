@@ -44,7 +44,7 @@ screen_extra_packages() {
     fi
 
     checklist_args+=(
-        "nonfree-repo" "Enable nonfree repository"               "off"
+        "nonfree-repo" "Enable nonfree repository"               "$( [[ "${ENABLE_NONFREE:-no}" == "yes" ]] && echo "on" || echo "off" )"
     )
 
     local selections
@@ -55,12 +55,12 @@ screen_extra_packages() {
     cleaned=$(echo "${selections}" | tr -d '"')
 
     local -a pkgs=()
-    ENABLE_NONFREE="${ENABLE_NONFREE:-no}"
-    ENABLE_ASUSCTL="${ENABLE_ASUSCTL:-no}"
-    ENABLE_FINGERPRINT="${ENABLE_FINGERPRINT:-no}"
-    ENABLE_THUNDERBOLT="${ENABLE_THUNDERBOLT:-no}"
-    ENABLE_SENSORS="${ENABLE_SENSORS:-no}"
-    ENABLE_WWAN="${ENABLE_WWAN:-no}"
+    ENABLE_NONFREE="no"
+    ENABLE_ASUSCTL="no"
+    ENABLE_FINGERPRINT="no"
+    ENABLE_THUNDERBOLT="no"
+    ENABLE_SENSORS="no"
+    ENABLE_WWAN="no"
 
     local item
     for item in ${cleaned}; do

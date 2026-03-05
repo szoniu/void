@@ -2,11 +2,6 @@
 # logging.sh — Logging functions with file + stderr output
 source "${LIB_DIR}/protection.sh"
 
-# Strip ANSI codes for log file
-_strip_ansi() {
-    sed 's/\x1b\[[0-9;]*m//g'
-}
-
 # Core log function
 _log() {
     local level="$1" color="$2"

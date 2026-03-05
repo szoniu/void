@@ -358,6 +358,7 @@ All tests are standalone — they do not require root or hardware. They use `DRY
 - **Dialog theme**: `data/dialogrc` loaded by `export DIALOGRC=` in `init_dialog()`. Whiptail ignores DIALOGRC. Gum uses `GUM_CHOOSE_*`/`GUM_INPUT_*` env vars.
 - **gum TUI backend**: `data/gum.tar.gz` extracted by `_extract_bundled_gum()` to `/tmp/void-installer-gum/`. Opt-out: `GUM_BACKEND=0`. Priority: gum > dialog > whiptail.
 - **Phantom ESC in gum**: gum/termenv sends OSC 11 (background color query) and CPR. `COLORFGBG="15;0"` suppresses OSC 11. `EPOCHREALTIME` with 150ms threshold detects phantom ESC from terminal responses vs real user ESC.
+- **ESP mount path**: ESP is mounted at `/boot/efi` consistently (disk.sh, bootloader.sh, system.sh fstab).
 - **`ROOTFS_FILE` unbound on resume**: When the `rootfs_download` checkpoint survived but the phase is skipped, `ROOTFS_FILE` is not set. `rootfs_verify()`/`rootfs_extract()` use `_find_rootfs_file()` for fallback — searches for `void-x86_64-ROOTFS-*.tar.xz` on `MOUNTPOINT`.
 - **Passwords/hashes NEVER in command arguments**: `openssl passwd -6 "${password}"` and `usermod -p "${hash}"` are visible in `ps aux`. Use: `openssl passwd -6 -stdin <<< "${password}"` and `bash -c 'echo "user:$1" | chpasswd -e' -- "${hash}"`.
 - **`eval echo "~${user}"` leads to injection**: Use `getent passwd "${user}" | cut -d: -f6` instead.

@@ -92,7 +92,7 @@ copy_dns_info() {
         return 0
     fi
 
-    # Remove symlink if it exists (systemd may create it)
+    # Remove symlink if it exists (may be a symlink to a resolver stub)
     if [[ -L "${MOUNTPOINT}/etc/resolv.conf" ]]; then
         rm "${MOUNTPOINT}/etc/resolv.conf"
     fi

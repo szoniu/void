@@ -206,6 +206,8 @@ _execute_phase() {
 
     einfo "=== Phase: ${phase_desc} ==="
 
+    maybe_exec "before_${phase_name}"
+
     case "${phase_name}" in
         preflight)
             preflight_checks
@@ -232,6 +234,8 @@ _execute_phase() {
             copy_installer_to_chroot
             ;;
     esac
+
+    maybe_exec "after_${phase_name}"
 
     checkpoint_set "${phase_name}"
 }

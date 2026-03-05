@@ -555,7 +555,7 @@ get_hardware_summary() {
         summary+="GPU: Hybrid (iGPU + dGPU)\n"
         summary+="  iGPU: ${IGPU_DEVICE_NAME:-unknown} (${IGPU_VENDOR:-unknown})\n"
         summary+="  dGPU: ${DGPU_DEVICE_NAME:-unknown} (${DGPU_VENDOR:-unknown})\n"
-        summary+="  PRIME render offload: enabled\n"
+        summary+="  PRIME render offload: available\n"
     else
         summary+="GPU: ${GPU_DEVICE_NAME:-unknown}\n"
         summary+="  Vendor: ${GPU_VENDOR:-unknown}\n"
