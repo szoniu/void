@@ -352,6 +352,16 @@ cleanup_target_disk() {
         umount -l "${mnt}" 2>/dev/null && einfo "Unmounted: ${mnt}" || true
     done
 
+    # Close LUKS containers backed by this disk
+    if command -v cryptsetup &>/dev/null && [[ -b /dev/mapper/cryptroot ]]; then
+        local backing
+        backing=$(cryptsetup status cryptroot 2>/dev/null | awk '/device:/ {print $2}') || true
+        if [[ "${backing}" == "${disk}"* ]]; then
+            ewarn "Closing LUKS on cryptroot"
+            cryptsetup close cryptroot 2>/dev/null || true
+        fi
+    fi
+
     einfo "Cleanup of ${disk} complete"
 }
 
