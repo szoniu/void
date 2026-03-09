@@ -126,12 +126,20 @@ Po zakończeniu installer zapyta czy chcesz rebootować. Wyjmij pendrive i uruch
 | 7 | Sieć | Hostname + mirror Void |
 | 8 | Locale | Timezone, język, keymap |
 | 9 | Kernel | mainline (rolling) lub LTS (stabilny) |
-| 10 | GPU | Auto-wykryty sterownik + hybrid GPU + NVIDIA open |
+| 10 | GPU | Auto-wykryty sterownik + hybrid GPU (PRIME offload) + NVIDIA open |
 | 11 | Desktop | KDE Plasma + wybór aplikacji (Firefox, Thunderbird, Kate...) |
 | 12 | Użytkownicy | Hasło root, konto użytkownika, grupy |
-| 13 | Pakiety | Dodatkowe pakiety + wykryte peryferiale (Bluetooth, fingerprint, Thunderbolt...) |
+| 13 | Pakiety | Dodatkowe pakiety + wykryte peryferiale (Bluetooth, fingerprint, Thunderbolt, IIO sensors, webcam, WWAN) + ASUS ROG/TUF tools (asusctl) |
 | 14 | Preset save | Opcjonalny eksport konfiguracji na przyszłość |
 | 15 | Podsumowanie | Pełny przegląd + potwierdzenie "YES" + countdown |
+
+### Wykrywanie hardware
+
+Installer automatycznie wykrywa i konfiguruje:
+
+- **GPU** — NVIDIA, AMD, Intel. W laptopach z dwoma kartami (np. Intel iGPU + NVIDIA dGPU) wykrywa **hybrid GPU** i konfiguruje PRIME render offload. Obsługuje NVIDIA open kernel module (Turing+).
+- **ASUS ROG/TUF** — wykrywanie przez DMI sysfs. Gdy wykryty, oferuje instalację `asusctl` (sterowanie wentylatorami, RGB, profile wydajności) z serwisem `asusd`.
+- **Peryferiale** — 6 automatycznych detekcji: Bluetooth, czytnik linii papilarnych (fprintd), Thunderbolt (bolt), czujniki IIO (iio-sensor-proxy), kamera, WWAN/LTE (ModemManager). Wykryte urządzenia pojawiają się jako opcje w ekranie pakietów.
 
 ## Dual-boot (Windows, Linux, multi-boot)
 

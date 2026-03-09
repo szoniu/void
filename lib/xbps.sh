@@ -55,8 +55,13 @@ xbps_update() {
 
 # xbps_install_base — Install essential base packages
 xbps_install_base() {
-    local -a base_pkgs=(
+    # Essential packages — fail hard if missing
+    local -a essential_pkgs=(
         sudo
+    )
+
+    # Optional packages — warn and skip if unavailable
+    local -a optional_pkgs=(
         bash-completion
         man-pages
         wget
@@ -64,7 +69,15 @@ xbps_install_base() {
     )
 
     einfo "Installing base packages..."
-    try "Installing base packages" xbps-install -y "${base_pkgs[@]}"
+
+    try "Installing essential packages" xbps-install -y "${essential_pkgs[@]}"
+
+    local pkg
+    for pkg in "${optional_pkgs[@]}"; do
+        einfo "Installing optional package: ${pkg}"
+        xbps-install -y "${pkg}" 2>/dev/null || ewarn "Package '${pkg}' not available, skipping"
+    done
+
     einfo "Base packages installed"
 }
 
@@ -84,7 +97,11 @@ install_extra_packages() {
     read -ra pkg_list <<< "${extras}"
 
     if [[ ${#pkg_list[@]} -gt 0 ]]; then
-        try "Installing extra packages" xbps-install -y "${pkg_list[@]}"
+        local pkg
+        for pkg in "${pkg_list[@]}"; do
+            einfo "Installing extra package: ${pkg}"
+            xbps-install -y "${pkg}" 2>/dev/null || ewarn "Package '${pkg}' not available, skipping"
+        done
     fi
 
     einfo "Extra packages installed"

@@ -29,7 +29,7 @@ lib/                    — Library modules (NEVER execute directly)
 ├── disk.sh             — Two-phase: disk_plan_add/add_stdin/show/auto/dualboot → cleanup_target_disk + disk_execute_plan (sfdisk), mount/unmount_filesystems, get_uuid/get_partuuid, shrink helpers (disk_plan_shrink)
 ├── network.sh          — check_network, install_network_manager, select_fastest_mirror
 ├── rootfs.sh           — rootfs_get_url/download/verify/extract (_find_rootfs_file for resume)
-├── xbps.sh             — xbps_configure_mirror/nonfree, xbps_update (base-voidstrap → base-system swap), xbps_install_base, install_extra_packages
+├── xbps.sh             — xbps_configure_mirror/nonfree, xbps_update (base-voidstrap → base-system swap), xbps_install_base, install_extra_packages, install_fingerprint_tools, install_thunderbolt_tools, install_sensor_tools, install_wwan_tools, install_asusctl_tools
 ├── kernel.sh           — kernel_install (mainline vs lts, firmware, microcode)
 ├── bootloader.sh       — bootloader_install, _configure_grub, _mount_other_oses_for_osprober, _verify_grub_config, _verify_efi_entries
 ├── system.sh           — system_set_timezone/locale/hostname/keymap, generate_fstab, install_filesystem_tools, system_create_users, system_finalize, _enable_service
