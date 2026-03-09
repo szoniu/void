@@ -87,6 +87,11 @@ screen_progress() {
     local total=${#INSTALL_PHASES[@]}
     local i=0
 
+    # Mount filesystems early so checkpoint validation can check target disk contents
+    if checkpoint_reached "disks" && ! mountpoint -q "${MOUNTPOINT}" 2>/dev/null; then
+        mount_filesystems 2>/dev/null || true
+    fi
+
     # Check for previous progress and handle resume
     if ! _detect_and_handle_resume; then
         einfo "Starting fresh installation"
@@ -114,6 +119,11 @@ screen_progress() {
                 checkpoint_migrate_to_target
                 _save_config_to_target
                 exec 2>>"${LOG_FILE}"
+            fi
+
+            # Re-setup chroot if skipped (pseudo-FS mounts needed for later phases)
+            if [[ "${phase_name}" == "xbps_preconfig" ]]; then
+                chroot_setup
             fi
 
             continue

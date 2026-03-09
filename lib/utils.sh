@@ -86,7 +86,10 @@ try() {
                 return 0
                 ;;
             log)
-                dialog_textbox "Log Output" "${LOG_FILE}" || true
+                local _tmplog
+                _tmplog=$(mktemp) && tail -50 "${LOG_FILE}" > "${_tmplog}" 2>/dev/null
+                dialog_textbox "Log (last 50 lines)" "${_tmplog}" || true
+                rm -f "${_tmplog}" 2>/dev/null
                 [[ ${_stderr_redirected} -eq 1 ]] && exec 2>>"${LOG_FILE}"
                 continue
                 ;;

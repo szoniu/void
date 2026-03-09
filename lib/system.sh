@@ -196,6 +196,19 @@ system_create_users() {
     if [[ -n "${USERNAME:-}" ]]; then
         local groups="${USER_GROUPS:-wheel,audio,video,input,storage,network}"
 
+        # Filter out groups that don't exist on the target system
+        local valid_groups=""
+        local g
+        IFS=',' read -ra _groups <<< "${groups}"
+        for g in "${_groups[@]}"; do
+            if getent group "${g}" &>/dev/null; then
+                valid_groups+="${valid_groups:+,}${g}"
+            else
+                ewarn "Group '${g}' does not exist, skipping"
+            fi
+        done
+        groups="${valid_groups:-wheel}"
+
         einfo "Creating user: ${USERNAME}"
         if ! id "${USERNAME}" &>/dev/null; then
             try "Creating user ${USERNAME}" \

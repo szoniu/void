@@ -161,21 +161,21 @@ _install_kde_apps() {
     # extras is space-separated from dialog checklist (may have quotes)
     local cleaned
     cleaned=$(echo "${extras}" | tr -d '"')
-    local app
+
+    # Map app names to package names (where they differ)
+    local app pkg
     for app in ${cleaned}; do
         case "${app}" in
-            firefox)       try "Installing ${app}" xbps-install -y firefox ;;
-            thunderbird)   try "Installing ${app}" xbps-install -y thunderbird ;;
-            libreoffice)   try "Installing ${app}" xbps-install -y libreoffice ;;
-            vlc)           try "Installing ${app}" xbps-install -y vlc ;;
-            gimp)          try "Installing ${app}" xbps-install -y gimp ;;
-            inkscape)      try "Installing ${app}" xbps-install -y inkscape ;;
-            krita)         try "Installing ${app}" xbps-install -y krita ;;
-            kdenlive)      try "Installing ${app}" xbps-install -y kdenlive ;;
-            obs-studio)    try "Installing ${app}" xbps-install -y obs ;;
-            vscode)        ewarn "vscode is not available in Void repos — skipping (install manually or use flatpak)" ;;
-            *)             try "Installing ${app}" xbps-install -y "${app}" ;;
+            obs-studio) pkg="obs" ;;
+            vscode)
+                ewarn "vscode is not available in Void repos — skipping (install manually or use flatpak)"
+                continue
+                ;;
+            *) pkg="${app}" ;;
         esac
+
+        einfo "Installing optional app: ${pkg}"
+        xbps-install -y "${pkg}" 2>/dev/null || ewarn "Package '${pkg}' not available, skipping"
     done
 
     einfo "KDE applications installed"
