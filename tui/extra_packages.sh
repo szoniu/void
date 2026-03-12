@@ -43,6 +43,9 @@ screen_extra_packages() {
         checklist_args+=("wwan-tools" "WWAN LTE modem support (ModemManager)" "on")
     fi
 
+    # Noctalia Shell — Wayland shell with compositor
+    checklist_args+=("noctalia-shell" "Noctalia Shell (Wayland shell + compositor)" "$( [[ "${ENABLE_NOCTALIA:-no}" == "yes" ]] && echo "on" || echo "off" )")
+
     checklist_args+=(
         "nonfree-repo" "Enable nonfree repository"               "$( [[ "${ENABLE_NONFREE:-no}" == "yes" ]] && echo "on" || echo "off" )"
     )
@@ -56,6 +59,7 @@ screen_extra_packages() {
 
     local -a pkgs=()
     ENABLE_NONFREE="no"
+    ENABLE_NOCTALIA="no"
     ENABLE_ASUSCTL="no"
     ENABLE_FINGERPRINT="no"
     ENABLE_THUNDERBOLT="no"
@@ -83,13 +87,25 @@ screen_extra_packages() {
             wwan-tools)
                 ENABLE_WWAN="yes"
                 ;;
+            noctalia-shell)
+                ENABLE_NOCTALIA="yes"
+                # Ask which Wayland compositor to install
+                local compositor
+                compositor=$(dialog_radiolist "Select Wayland Compositor for Noctalia" \
+                    "Hyprland" "Hyprland — dynamic tiling Wayland compositor" "on"  \
+                    "niri"     "Niri — scrollable-tiling Wayland compositor"  "off" \
+                    "sway"     "Sway — i3-compatible Wayland compositor"      "off" \
+                ) || return "${TUI_BACK}"
+                NOCTALIA_COMPOSITOR=$(echo "${compositor}" | tr -d '"')
+                export NOCTALIA_COMPOSITOR
+                ;;
             *)
                 pkgs+=("${item}")
                 ;;
         esac
     done
 
-    export ENABLE_NONFREE ENABLE_ASUSCTL ENABLE_FINGERPRINT \
+    export ENABLE_NONFREE ENABLE_NOCTALIA ENABLE_ASUSCTL ENABLE_FINGERPRINT \
            ENABLE_THUNDERBOLT ENABLE_SENSORS ENABLE_WWAN
 
     # Step 2: Free-form input for additional packages
@@ -109,6 +125,7 @@ Leave empty to skip:" \
 
     einfo "Extra packages: ${EXTRA_PACKAGES:-none}"
     [[ "${ENABLE_NONFREE}" == "yes" ]] && einfo "Nonfree repository: enabled"
+    [[ "${ENABLE_NOCTALIA}" == "yes" ]] && einfo "Noctalia Shell: enabled (compositor: ${NOCTALIA_COMPOSITOR:-Hyprland})"
     [[ "${ENABLE_ASUSCTL}" == "yes" ]] && einfo "ASUS ROG tools: enabled"
     [[ "${ENABLE_FINGERPRINT}" == "yes" ]] && einfo "Fingerprint reader: fprintd enabled"
     [[ "${ENABLE_THUNDERBOLT}" == "yes" ]] && einfo "Thunderbolt: bolt enabled"

@@ -326,6 +326,7 @@ _do_chroot_phases() {
         maybe_exec 'before_extras'
         xbps_install_base
         install_extra_packages
+        install_noctalia_shell
         install_fingerprint_tools
         install_thunderbolt_tools
         install_sensor_tools

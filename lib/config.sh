@@ -172,6 +172,11 @@ validate_config() {
         errors+=("GPU_VENDOR='${GPU_VENDOR}' — must be nvidia, amd, intel, none, or unknown")
     fi
 
+    if [[ -n "${NOCTALIA_COMPOSITOR:-}" ]] && \
+       [[ "${NOCTALIA_COMPOSITOR}" != "Hyprland" && "${NOCTALIA_COMPOSITOR}" != "niri" && "${NOCTALIA_COMPOSITOR}" != "sway" ]]; then
+        errors+=("NOCTALIA_COMPOSITOR='${NOCTALIA_COMPOSITOR}' — must be Hyprland, niri, or sway")
+    fi
+
     # --- Format validation ---
     # Hostname: RFC 1123
     if [[ -n "${HOSTNAME:-}" ]] && \
