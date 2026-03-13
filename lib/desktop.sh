@@ -319,7 +319,7 @@ input {
     kb_layout = ${kb_layout}
     follow_mouse = 1
     touchpad {
-        natural_scroll = true
+        natural_scroll = false
     }
 }
 
@@ -390,7 +390,6 @@ input {
 
     touchpad {
         tap
-        natural-scroll
         dwt
     }
 
@@ -619,7 +618,7 @@ input type:keyboard {
 # ---------------------------------------------------------
 input type:touchpad {
     tap enabled
-    natural_scroll enabled
+    natural_scroll disabled
     dwt enabled
     middle_emulation enabled
     scroll_method two_finger
