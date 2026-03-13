@@ -33,7 +33,7 @@ lib/                    — Library modules (NEVER execute directly)
 ├── kernel.sh           — kernel_install (mainline vs lts, firmware, microcode)
 ├── bootloader.sh       — bootloader_install, _configure_grub, _mount_other_oses_for_osprober, _verify_grub_config, _verify_efi_entries
 ├── system.sh           — system_set_timezone/locale/hostname/keymap, generate_fstab, install_filesystem_tools, system_create_users, system_finalize, _enable_service
-├── desktop.sh          — desktop_install (GPU drivers, KDE Plasma, SDDM, elogind, PipeWire, KDE apps)
+├── desktop.sh          — desktop_install (GPU drivers, KDE Plasma, SDDM, elogind, PipeWire, KDE apps), install_hyprland_ecosystem, install_noctalia_shell
 ├── swap.sh             — swap_setup (zramen, partition, swap file)
 ├── chroot.sh           — chroot_setup/teardown/exec, copy_dns_info, copy_installer_to_chroot
 ├── hooks.sh            — maybe_exec 'before_X' / 'after_X'
@@ -134,6 +134,9 @@ All config variables are defined in `CONFIG_VARS[]` in `lib/constants.sh`:
 | `SHRINK_PARTITION` | /dev/sdXN | Partition to shrink (dual-boot) |
 | `SHRINK_PARTITION_FSTYPE` | ntfs/ext4/btrfs | Filesystem of partition to shrink |
 | `SHRINK_NEW_SIZE_MIB` | integer | New size after shrink (MiB) |
+| `ENABLE_HYPRLAND` | yes/no | Install Hyprland ecosystem (standalone, niezależny od Noctalia) |
+| `ENABLE_NOCTALIA` | yes/no | Install Noctalia Shell (Wayland shell) |
+| `NOCTALIA_COMPOSITOR` | Hyprland/niri/sway | Kompozytor Wayland dla Noctalia Shell |
 
 ### Void-specific patterns
 
@@ -188,6 +191,32 @@ NVIDIA proprietary drivers require the nonfree repository. The installer:
 #### elogind requirement for KDE
 
 KDE Plasma on Void (runit) requires `elogind` for session management. Without it, KDE cannot manage permissions, power actions, or seat allocation. The installer installs and enables elogind alongside KDE.
+
+#### Hyprland ecosystem (opcjonalny)
+
+`install_hyprland_ecosystem()` w `lib/desktop.sh` — instaluje standalone ekosystem Hyprland (niezależny od Noctalia Shell). Wywoływana z `install.sh` gdy `ENABLE_HYPRLAND=yes`.
+
+Pakiety: `Hyprland hyprpaper hypridle hyprlock waybar wofi mako grim slurp wl-clipboard brightnessctl`.
+
+Opcja widoczna w ekranie 13 (Extra Packages) jako `hyprland-ecosystem`. Użytkownik może wybrać Hyprland ecosystem niezależnie od Noctalia Shell i KDE Plasma.
+
+#### Noctalia Shell (opcjonalny)
+
+`install_noctalia_shell()` w `lib/desktop.sh` — instaluje Noctalia Shell (Wayland shell oparty na Quickshell). Wywoływana z `install.sh` gdy `ENABLE_NOCTALIA=yes`.
+
+Konfiguracja w ekranie 13 (Extra Packages):
+- Użytkownik wybiera `noctalia-shell` w checkliście
+- Radiolist wyboru kompozytora: **Hyprland** (domyślny) / **niri** / **sway**
+- Wynik zapisywany w `NOCTALIA_COMPOSITOR`
+
+Repozytorium third-party: `rxelelo.github.io/noctalia-void-repo` (dodawane jako `/etc/xbps.d/20-noctalia.conf`). Pakiety: `noctalia-shell` (+ `noctalia-qs`), wybrany kompozytor, opcjonalne: `cliphist wlsunset cava brightnessctl`.
+
+Autostart — konfiguracja w `/etc/skel/.config/{hypr,niri,sway}/`:
+- **Hyprland**: `hyprland.conf` z `exec-once = qs -c noctalia-shell`, blur layer rules, keybindami IPC
+- **niri**: `config.kdl` z `spawn-at-startup "qs" "-c" "noctalia-shell"`, layer rules, keybindami IPC
+- **sway**: `config` z `exec qs -c noctalia-shell`, environment.d/sway.conf, keybindami IPC
+
+Konfiguracja kopiowana także do `$HOME` użytkownika (jeśli konto już istnieje). Touchpad: `natural_scroll = false` / `disabled` we wszystkich kompozytorach.
 
 #### /etc/rc.conf for hostname and keymap
 

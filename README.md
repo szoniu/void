@@ -129,7 +129,7 @@ Po zakończeniu installer zapyta czy chcesz rebootować. Wyjmij pendrive i uruch
 | 10 | GPU | Auto-wykryty sterownik + hybrid GPU (PRIME offload) + NVIDIA open |
 | 11 | Desktop | KDE Plasma + wybór aplikacji (Firefox, Thunderbird, Kate...) |
 | 12 | Użytkownicy | Hasło root, konto użytkownika, grupy |
-| 13 | Pakiety | Dodatkowe pakiety + wykryte peryferiale (Bluetooth, fingerprint, Thunderbolt, IIO sensors, webcam, WWAN) + ASUS ROG/TUF tools (asusctl) |
+| 13 | Pakiety | Dodatkowe pakiety + wykryte peryferiale (Bluetooth, fingerprint, Thunderbolt, IIO sensors, webcam, WWAN) + ASUS ROG/TUF tools (asusctl) + opcjonalny ekosystem Hyprland + Noctalia Shell (z wyborem kompozytora: Hyprland/niri/sway) |
 | 14 | Preset save | Opcjonalny eksport konfiguracji na przyszłość |
 | 15 | Podsumowanie | Pełny przegląd + potwierdzenie "YES" + countdown |
 
@@ -140,6 +140,15 @@ Installer automatycznie wykrywa i konfiguruje:
 - **GPU** — NVIDIA, AMD, Intel. W laptopach z dwoma kartami (np. Intel iGPU + NVIDIA dGPU) wykrywa **hybrid GPU** i konfiguruje PRIME render offload. Obsługuje NVIDIA open kernel module (Turing+).
 - **ASUS ROG/TUF** — wykrywanie przez DMI sysfs. Gdy wykryty, oferuje instalację `asusctl` (sterowanie wentylatorami, RGB, profile wydajności) z serwisem `asusd`.
 - **Peryferiale** — 6 automatycznych detekcji: Bluetooth, czytnik linii papilarnych (fprintd), Thunderbolt (bolt), czujniki IIO (iio-sensor-proxy), kamera, WWAN/LTE (ModemManager). Wykryte urządzenia pojawiają się jako opcje w ekranie pakietów.
+
+### Opcjonalne środowiska Wayland
+
+Oprócz KDE Plasma, installer oferuje dwa opcjonalne środowiska Wayland (ekran 13 — Pakiety):
+
+- **Hyprland ecosystem** — standalone ekosystem tiling Wayland compositor: Hyprland + hyprpaper, hypridle, hyprlock, waybar, wofi, mako, grim, slurp, wl-clipboard, brightnessctl. Niezależny od Noctalia i KDE.
+- **Noctalia Shell** — nowoczesny Wayland shell (oparty na Quickshell) z wyborem kompozytora: **Hyprland**, **niri** lub **sway**. Instalowany z repozytorium third-party (`noctalia-void-repo`). Generuje gotową konfigurację kompozytora z autostartowaniem Noctalia Shell i keybindami IPC.
+
+Obie opcje można wybrać niezależnie od siebie i od KDE Plasma.
 
 ## Dual-boot (Windows, Linux, multi-boot)
 
