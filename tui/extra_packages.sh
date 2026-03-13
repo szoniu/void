@@ -43,6 +43,9 @@ screen_extra_packages() {
         checklist_args+=("wwan-tools" "WWAN LTE modem support (ModemManager)" "on")
     fi
 
+    # Hyprland ecosystem — standalone Wayland desktop
+    checklist_args+=("hyprland-ecosystem" "Hyprland + ekosystem (waybar, wofi, mako, grim...)" "$( [[ "${ENABLE_HYPRLAND:-no}" == "yes" ]] && echo "on" || echo "off" )")
+
     # Noctalia Shell — Wayland shell with compositor
     checklist_args+=("noctalia-shell" "Noctalia Shell (Wayland shell + compositor)" "$( [[ "${ENABLE_NOCTALIA:-no}" == "yes" ]] && echo "on" || echo "off" )")
 
@@ -59,6 +62,7 @@ screen_extra_packages() {
 
     local -a pkgs=()
     ENABLE_NONFREE="no"
+    ENABLE_HYPRLAND="no"
     ENABLE_NOCTALIA="no"
     ENABLE_ASUSCTL="no"
     ENABLE_FINGERPRINT="no"
@@ -87,6 +91,9 @@ screen_extra_packages() {
             wwan-tools)
                 ENABLE_WWAN="yes"
                 ;;
+            hyprland-ecosystem)
+                ENABLE_HYPRLAND="yes"
+                ;;
             noctalia-shell)
                 ENABLE_NOCTALIA="yes"
                 # Ask which Wayland compositor to install
@@ -105,8 +112,8 @@ screen_extra_packages() {
         esac
     done
 
-    export ENABLE_NONFREE ENABLE_NOCTALIA ENABLE_ASUSCTL ENABLE_FINGERPRINT \
-           ENABLE_THUNDERBOLT ENABLE_SENSORS ENABLE_WWAN
+    export ENABLE_NONFREE ENABLE_HYPRLAND ENABLE_NOCTALIA ENABLE_ASUSCTL \
+           ENABLE_FINGERPRINT ENABLE_THUNDERBOLT ENABLE_SENSORS ENABLE_WWAN
 
     # Step 2: Free-form input for additional packages
     local extra
@@ -125,6 +132,7 @@ Leave empty to skip:" \
 
     einfo "Extra packages: ${EXTRA_PACKAGES:-none}"
     [[ "${ENABLE_NONFREE}" == "yes" ]] && einfo "Nonfree repository: enabled"
+    [[ "${ENABLE_HYPRLAND}" == "yes" ]] && einfo "Hyprland ecosystem: enabled"
     [[ "${ENABLE_NOCTALIA}" == "yes" ]] && einfo "Noctalia Shell: enabled (compositor: ${NOCTALIA_COMPOSITOR:-Hyprland})"
     [[ "${ENABLE_ASUSCTL}" == "yes" ]] && einfo "ASUS ROG tools: enabled"
     [[ "${ENABLE_FINGERPRINT}" == "yes" ]] && einfo "Fingerprint reader: fprintd enabled"

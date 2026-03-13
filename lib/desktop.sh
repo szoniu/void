@@ -193,6 +193,18 @@ _install_bluetooth() {
     einfo "Bluetooth support installed"
 }
 
+# install_hyprland_ecosystem — Hyprland + waybar, wofi, mako, grim, slurp, wl-clipboard, brightnessctl
+install_hyprland_ecosystem() {
+    if [[ "${ENABLE_HYPRLAND:-no}" != "yes" ]]; then
+        return 0
+    fi
+    einfo "Installing Hyprland ecosystem..."
+    try "Installing Hyprland ecosystem" xbps-install -y \
+        Hyprland hyprpaper hypridle hyprlock \
+        waybar wofi mako grim slurp wl-clipboard brightnessctl
+    einfo "Hyprland ecosystem installed"
+}
+
 # install_noctalia_shell — Install Noctalia Shell + Wayland compositor
 install_noctalia_shell() {
     if [[ "${ENABLE_NOCTALIA:-no}" != "yes" ]]; then
