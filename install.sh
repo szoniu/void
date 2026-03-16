@@ -384,10 +384,13 @@ preflight_checks() {
         has_network || die "Network connectivity required"
     fi
 
-    # Sync clock (chrony first — Void's ntpd is a chrony wrapper that doesn't support -g)
+    # Sync clock (skip if NTP daemon already running)
     if [[ "${DRY_RUN}" != "1" ]]; then
-        if command -v chronyd &>/dev/null; then
-            try "Syncing system clock" chronyd -q || true
+        if pgrep -x chronyd &>/dev/null || pgrep -x ntpd &>/dev/null; then
+            einfo "NTP daemon already running, clock should be synced"
+        elif command -v chronyc &>/dev/null; then
+            chronyc makestep &>/dev/null || chronyd -q &>/dev/null || true
+            einfo "Clock synced via chrony"
         elif command -v ntpdate &>/dev/null; then
             try "Syncing system clock" ntpdate pool.ntp.org || true
         elif ntpd --help 2>&1 | grep -q 'step'; then
