@@ -384,6 +384,12 @@ preflight_checks() {
         has_network || die "Network connectivity required"
     fi
 
+    # Ensure curl is available (Void base ISO ships neither curl nor wget)
+    if [[ "${DRY_RUN}" != "1" ]] && ! command -v curl &>/dev/null; then
+        einfo "Installing curl (required for downloads)..."
+        xbps-install -Sy curl >/dev/null 2>&1 || true
+    fi
+
     # Sync clock (skip if NTP daemon already running)
     if [[ "${DRY_RUN}" != "1" ]]; then
         if pgrep -x chronyd &>/dev/null || pgrep -x ntpd &>/dev/null; then
