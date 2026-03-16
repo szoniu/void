@@ -384,10 +384,15 @@ preflight_checks() {
         has_network || die "Network connectivity required"
     fi
 
-    # Ensure curl is available (Void base ISO ships neither curl nor wget)
-    if [[ "${DRY_RUN}" != "1" ]] && ! command -v curl &>/dev/null; then
-        einfo "Installing curl (required for downloads)..."
-        xbps-install -Sy curl >/dev/null 2>&1 || true
+    # Ensure required tools are available (Void base ISO is very minimal)
+    if [[ "${DRY_RUN}" != "1" ]]; then
+        local -a _missing_pkgs=()
+        command -v curl &>/dev/null || _missing_pkgs+=(curl)
+        command -v xz &>/dev/null   || _missing_pkgs+=(xz)
+        if (( ${#_missing_pkgs[@]} > 0 )); then
+            einfo "Installing missing tools: ${_missing_pkgs[*]}..."
+            xbps-install -Sy "${_missing_pkgs[@]}" >/dev/null 2>&1 || true
+        fi
     fi
 
     # Sync clock (skip if NTP daemon already running)
