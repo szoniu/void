@@ -11,6 +11,16 @@
 set -euo pipefail
 shopt -s inherit_errexit
 
+trap '_err_handler $? ${LINENO} "${BASH_SOURCE[0]}" "${FUNCNAME[0]:-main}"' ERR
+_err_handler() {
+    local rc=$1 line=$2 src=$3 func=$4
+    # Restore stderr if redirected to log (fd 4 trick from screen_progress)
+    if { true >&4; } 2>/dev/null; then exec 2>&4; fi
+    eerror "Error in ${src}:${line} (${func}) — exit code ${rc}" 2>/dev/null || \
+        echo "[ERROR] Error in ${src}:${line} (${func}) — exit code ${rc}" >&2
+}
+shopt -s inherit_errexit
+
 # Mark as the Void installer (used by protection.sh)
 export _VOID_INSTALLER=1
 
