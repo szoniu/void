@@ -266,9 +266,14 @@ disk_plan_shrink() {
         ",${new_size}MiB"$'\n' \
         sfdisk --force --no-reread -N "${part_num}" "${disk}"
 
-    # Re-read partition table
-    disk_plan_add "Re-read partition table on ${disk}" \
-        partprobe "${disk}"
+    # Re-read partition table (partprobe preferred, blockdev as fallback)
+    if command -v partprobe &>/dev/null; then
+        disk_plan_add "Re-read partition table on ${disk}" \
+            partprobe "${disk}"
+    else
+        disk_plan_add "Re-read partition table on ${disk}" \
+            blockdev --rereadpt "${disk}"
+    fi
 }
 
 # disk_plan_dualboot — Generate dual-boot partitioning plan
@@ -402,7 +407,11 @@ disk_execute_plan() {
 
     # Ensure kernel recognizes new partitions
     if [[ "${DRY_RUN}" != "1" ]]; then
-        partprobe "${TARGET_DISK}" 2>/dev/null || true
+        if command -v partprobe &>/dev/null; then
+            partprobe "${TARGET_DISK}" 2>/dev/null || true
+        else
+            blockdev --rereadpt "${TARGET_DISK}" 2>/dev/null || true
+        fi
         sleep 2
 
         # Verify ROOT_PARTITION exists for dual-boot (sfdisk --append may assign different number)
