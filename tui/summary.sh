@@ -44,8 +44,13 @@ screen_summary() {
     [[ "${ENABLE_WWAN:-no}" == "yes" ]] && summary+="WWAN LTE:     ModemManager enabled\n"
     summary+="\n"
     summary+="Username:     ${USERNAME:-user}\n"
-    summary+="Desktop:      KDE Plasma + SDDM + PipeWire\n"
-    [[ -n "${DESKTOP_EXTRAS:-}" ]] && summary+="KDE apps:     ${DESKTOP_EXTRAS}\n"
+    if [[ "${DESKTOP_TYPE:-kde}" == "gnome" ]]; then
+        summary+="Desktop:      GNOME + GDM + PipeWire\n"
+        [[ -n "${DESKTOP_EXTRAS:-}" ]] && summary+="GNOME apps:   ${DESKTOP_EXTRAS}\n"
+    else
+        summary+="Desktop:      KDE Plasma + SDDM + PipeWire\n"
+        [[ -n "${DESKTOP_EXTRAS:-}" ]] && summary+="KDE apps:     ${DESKTOP_EXTRAS}\n"
+    fi
     [[ -n "${EXTRA_PACKAGES:-}" ]] && summary+="Extra pkgs:   ${EXTRA_PACKAGES}\n"
 
     if [[ -n "${SHRINK_PARTITION:-}" ]]; then

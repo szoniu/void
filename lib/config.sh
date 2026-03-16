@@ -167,6 +167,11 @@ validate_config() {
         errors+=("KERNEL_TYPE='${KERNEL_TYPE}' — must be mainline or lts")
     fi
 
+    if [[ -n "${DESKTOP_TYPE:-}" ]] && \
+       [[ "${DESKTOP_TYPE}" != "kde" && "${DESKTOP_TYPE}" != "gnome" ]]; then
+        errors+=("DESKTOP_TYPE='${DESKTOP_TYPE}' — must be kde or gnome")
+    fi
+
     if [[ -n "${GPU_VENDOR:-}" ]] && \
        [[ "${GPU_VENDOR}" != "nvidia" && "${GPU_VENDOR}" != "amd" && "${GPU_VENDOR}" != "intel" && "${GPU_VENDOR}" != "none" && "${GPU_VENDOR}" != "unknown" ]]; then
         errors+=("GPU_VENDOR='${GPU_VENDOR}' — must be nvidia, amd, intel, none, or unknown")

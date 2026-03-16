@@ -2,13 +2,21 @@
 # desktop.sh — Desktop environment installation for Void Linux
 source "${LIB_DIR}/protection.sh"
 
-# desktop_install — Install full KDE Plasma desktop
+# desktop_install — Install desktop environment (KDE Plasma or GNOME)
 desktop_install() {
     einfo "=== Desktop Installation ==="
 
     _install_gpu_drivers
-    _install_kde_plasma
-    _install_kde_apps
+
+    local desktop="${DESKTOP_TYPE:-kde}"
+    if [[ "${desktop}" == "gnome" ]]; then
+        _install_gnome_desktop
+        _install_gnome_apps
+    else
+        _install_kde_plasma
+        _install_kde_apps
+    fi
+
     _install_bluetooth
     _install_printing
 
@@ -180,6 +188,65 @@ _install_kde_apps() {
     done
 
     einfo "KDE applications installed"
+}
+
+# _install_gnome_desktop — Install GNOME desktop
+_install_gnome_desktop() {
+    einfo "Installing GNOME desktop..."
+
+    # Core GNOME + Xorg + GDM
+    try "Installing GNOME" xbps-install -y \
+        gnome \
+        xorg-minimal \
+        gdm \
+        elogind \
+        dbus
+
+    # PipeWire audio
+    try "Installing PipeWire" xbps-install -y \
+        pipewire \
+        wireplumber \
+        alsa-pipewire \
+        libspa-bluetooth
+
+    # Enable services
+    _enable_service "dbus"
+    _enable_service "gdm"
+    _enable_service "elogind"
+
+    # Disable conflicting services (GDM manages its own tty)
+    rm -f /var/service/agetty-tty7 2>/dev/null || true
+
+    # PipeWire autostart config
+    mkdir -p /etc/pipewire
+    if [[ -f /usr/share/pipewire/pipewire.conf ]]; then
+        cp /usr/share/pipewire/pipewire.conf /etc/pipewire/
+    fi
+
+    einfo "GNOME installed"
+}
+
+# _install_gnome_apps — Install selected GNOME applications
+_install_gnome_apps() {
+    local extras="${DESKTOP_EXTRAS:-}"
+
+    if [[ -z "${extras}" ]]; then
+        return 0
+    fi
+
+    einfo "Installing GNOME applications..."
+
+    # extras is space-separated from dialog checklist (may have quotes)
+    local cleaned
+    cleaned=$(echo "${extras}" | tr -d '"')
+
+    local app
+    for app in ${cleaned}; do
+        einfo "Installing optional app: ${app}"
+        xbps-install -y "${app}" 2>/dev/null || ewarn "Package '${app}' not available, skipping"
+    done
+
+    einfo "GNOME applications installed"
 }
 
 # _install_bluetooth — Install Bluetooth support (auto when hardware detected)
