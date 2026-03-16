@@ -145,18 +145,8 @@ install_wwan_tools() {
     fi
     einfo "Installing WWAN/LTE support..."
     try "Installing ModemManager" xbps-install -y ModemManager libmbim libqmi
-
-    # ModemManager package on Void does not ship a runit service — create one
-    if [[ ! -d /etc/sv/ModemManager ]]; then
-        mkdir -p /etc/sv/ModemManager
-        cat > /etc/sv/ModemManager/run << 'RUNEOF'
-#!/bin/sh
-exec ModemManager --filter-policy=strict
-RUNEOF
-        chmod 755 /etc/sv/ModemManager/run
-    fi
-
-    _enable_service "ModemManager"
+    # ModemManager on Void has no runit service — it uses D-Bus activation.
+    # NetworkManager will auto-start it via D-Bus when a modem is detected.
     einfo "WWAN/LTE support installed"
 }
 
