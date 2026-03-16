@@ -247,23 +247,44 @@ Na maszynie docelowej (bootowanej z Live ISO):
 # 1. Ustaw hasło root
 passwd root
 
-# 2. Zainstaluj i uruchom sshd
+# 2. Zainstaluj openssh
 xbps-install -Sy openssh
+
+# 3. Wygeneruj klucze hosta (bez tego sshd nie wystartuje!)
+ssh-keygen -A
+
+# 4. Zezwól na logowanie root z hasłem
+# Void domyślnie blokuje root login — trzeba to włączyć ręcznie:
+echo "PermitRootLogin yes" >> /etc/ssh/sshd_config
+
+# 5. Uruchom sshd
 ln -sf /etc/sv/sshd /var/service/sshd
 
-# 3. Sprawdź IP
+# 6. Sprawdź czy działa
+sv status sshd          # powinno: run
+ss -tlnp | grep 22      # powinno: LISTEN
+
+# 7. Sprawdź IP
 ip -4 addr show | grep inet
 ```
+
+> **Uwaga**: Void Live ISO nie ma domyślnie zainstalowanego `nano` ani `vim`. Jeśli potrzebujesz edytora: `xbps-install -Sy nano`.
 
 Z innego komputera:
 
 ```bash
-ssh -o PubkeyAuthentication=no root@<IP-live-ISO>
+ssh root@<IP-live-ISO>
 xbps-install -Sy git
 git clone https://github.com/szoniu/void.git
 cd void
 ./install.sh
 ```
+
+**Rozwiązywanie problemów z SSH:**
+
+- **`Connection reset by peer`** — sshd nie działa. Sprawdź: `sv status sshd`. Jeśli brak — upewnij się że `ssh-keygen -A` wygenerowało klucze hosta w `/etc/ssh/`.
+- **`Permission denied (publickey)`** — Void domyślnie nie pozwala na logowanie root z hasłem. Dodaj `PermitRootLogin yes` do `/etc/ssh/sshd_config` i `sv restart sshd`.
+- **`Permission denied, please try again`** — hasło jest złe lub nie zostało ustawione. Uruchom `passwd root` ponownie na maszynie docelowej.
 
 #### Monitorowanie z drugiego połączenia
 
