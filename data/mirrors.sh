@@ -39,6 +39,7 @@ get_mirror_list_for_dialog() {
             *lysator*)      label="Sweden" ;;
             *)              label="${url}" ;;
         esac
-        echo "${url}" "${label}"
+        echo "${url}"
+        echo "${label}"
     done
 }

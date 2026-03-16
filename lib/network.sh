@@ -40,7 +40,7 @@ select_fastest_mirror() {
         # Test download speed against the current/ index
         local start_time end_time elapsed
         start_time=$(date +%s%N)
-        if wget -q --timeout=5 -O /dev/null "${url}/current/" 2>/dev/null; then
+        if curl -fsSL --max-time 5 -o /dev/null "${url}/current/" 2>/dev/null; then
             end_time=$(date +%s%N)
             elapsed=$(( (end_time - start_time) / 1000000 ))  # ms
             results+=("${elapsed}|${url}")

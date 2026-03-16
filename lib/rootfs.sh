@@ -34,7 +34,7 @@ rootfs_get_url() {
     local sha256_file
     sha256_file=$(mktemp "${TMPDIR:-/tmp}/void-sha256.XXXXXX")
 
-    if ! wget -q -O "${sha256_file}" "${base_url}/sha256sum.txt" 2>>"${LOG_FILE}"; then
+    if ! curl -fsSL -o "${sha256_file}" "${base_url}/sha256sum.txt" 2>>"${LOG_FILE}"; then
         rm -f "${sha256_file}"
         die "Failed to fetch sha256sum.txt from ${base_url}"
     fi
@@ -77,7 +77,7 @@ rootfs_download() {
     export ROOTFS_FILE
 
     einfo "Downloading ROOTFS to ${ROOTFS_FILE}..."
-    try "Downloading Void ROOTFS" wget -O "${ROOTFS_FILE}" "${ROOTFS_URL}"
+    try "Downloading Void ROOTFS" curl -fSL -o "${ROOTFS_FILE}" "${ROOTFS_URL}"
 
     einfo "ROOTFS downloaded: ${ROOTFS_FILE}"
 }
@@ -101,7 +101,7 @@ rootfs_verify() {
     sha256_file=$(mktemp "${TMPDIR:-/tmp}/void-sha256-verify.XXXXXX")
 
     einfo "Downloading SHA256 checksums..."
-    try "Downloading SHA256 checksums" wget -q -O "${sha256_file}" "${sha256_url}"
+    try "Downloading SHA256 checksums" curl -fsSL -o "${sha256_file}" "${sha256_url}"
 
     local rootfs_basename
     rootfs_basename=$(basename "${ROOTFS_FILE}")

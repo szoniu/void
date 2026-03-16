@@ -132,7 +132,7 @@ check_dependencies() {
         umount
         blkid
         lsblk
-        wget
+        curl
         tar
         sha256sum
         chroot
