@@ -40,8 +40,9 @@ rootfs_get_url() {
     fi
 
     # Extract the ROOTFS filename (glibc x86_64, not musl)
+    # Format: SHA256 (void-x86_64-ROOTFS-20250202.tar.xz) = <hash>
     local rootfs_name
-    rootfs_name=$(sed -n 's/^[a-f0-9]\{64\}  \(void-x86_64-ROOTFS-[0-9]\{8\}\.tar\.xz\)$/\1/p' "${sha256_file}" | head -1) || true
+    rootfs_name=$(sed -n 's/^SHA256 (\(void-x86_64-ROOTFS-[0-9]\{8\}\.tar\.xz\)) = [a-f0-9]\{64\}$/\1/p' "${sha256_file}" | head -1) || true
     rm -f "${sha256_file}"
 
     if [[ -z "${rootfs_name}" ]]; then
@@ -107,8 +108,9 @@ rootfs_verify() {
     rootfs_basename=$(basename "${ROOTFS_FILE}")
 
     # Extract expected hash for our file
+    # Format: SHA256 (filename) = <hash>
     local expected_hash
-    expected_hash=$(sed -n "s/^\([a-f0-9]\{64\}\)  ${rootfs_basename}$/\1/p" "${sha256_file}") || true
+    expected_hash=$(sed -n "s/^SHA256 (${rootfs_basename}) = \([a-f0-9]\{64\}\)$/\1/p" "${sha256_file}") || true
     rm -f "${sha256_file}"
 
     if [[ -z "${expected_hash}" ]]; then
