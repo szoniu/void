@@ -22,10 +22,14 @@ kernel_install() {
     # Install firmware
     try "Installing firmware" xbps-install -y linux-firmware linux-firmware-amd linux-firmware-intel linux-firmware-nvidia
 
-    # Intel microcode (if Intel CPU)
+    # Intel microcode (if Intel CPU — requires nonfree repo)
     if grep -q "GenuineIntel" /proc/cpuinfo 2>/dev/null; then
         einfo "Intel CPU detected — installing microcode"
-        try "Installing Intel microcode" xbps-install -y intel-ucode
+        # Ensure nonfree repo is available (intel-ucode is nonfree)
+        if ! xbps-query void-repo-nonfree &>/dev/null; then
+            try "Enabling nonfree repository" xbps-install -Sy void-repo-nonfree
+        fi
+        try "Installing Intel microcode" xbps-install -Sy intel-ucode
     fi
 
     # AMD microcode (if AMD CPU)
