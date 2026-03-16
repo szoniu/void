@@ -231,8 +231,8 @@ setup_fake_partition "sda2" 1 1
 echo "/dev/sda2 ext4" > "${_RESUME_TEST_DIR}/partitions.list"
 
 try_resume_from_disk || true
-# macOS uses -f '%Lp', Linux uses -c '%a'
-perms=$(stat -f '%Lp' "${CONFIG_FILE}" 2>/dev/null || stat -c '%a' "${CONFIG_FILE}" 2>/dev/null || echo "000")
+# Linux uses -c '%a', macOS uses -f '%Lp'
+perms=$(stat -c '%a' "${CONFIG_FILE}" 2>/dev/null || stat -f '%Lp' "${CONFIG_FILE}" 2>/dev/null || echo "000")
 assert_eq "Config file permissions restricted (600)" "600" "${perms}"
 
 rm -rf "${_RESUME_TEST_DIR}"
