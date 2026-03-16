@@ -106,10 +106,11 @@ _install_intel_drivers() {
 _install_kde_plasma() {
     einfo "Installing KDE Plasma desktop..."
 
-    # Core KDE Plasma
+    # Core KDE Plasma + Xorg (SDDM requires X server for display greeter)
     try "Installing KDE Plasma" xbps-install -y \
         kde5 \
         kde5-baseapps \
+        xorg-minimal \
         sddm \
         elogind \
         dbus
