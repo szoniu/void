@@ -87,6 +87,12 @@ Installer poprowadzi Cię przez 15 ekranów konfiguracji, a potem zainstaluje ws
 
 Po zakończeniu installer zapyta czy chcesz rebootować. Wyjmij pendrive i uruchom komputer — powinieneś zobaczyć GRUB, a potem ekran logowania SDDM z KDE Plasma.
 
+Po zalogowaniu — aktualizacja systemu i pakietów:
+
+```bash
+sudo xbps-install -Su
+```
+
 ## Alternatywne sposoby uruchomienia
 
 ```bash
