@@ -339,6 +339,7 @@ _do_chroot_phases() {
         install_extra_packages
         install_hyprland_ecosystem
         install_noctalia_shell
+        install_gaming
         install_fingerprint_tools
         install_thunderbolt_tools
         install_sensor_tools
@@ -367,6 +368,9 @@ _do_chroot_phases() {
 # run_post_install — Final steps after chroot
 run_post_install() {
     einfo "=== Post-installation ==="
+
+    # Copy bundled gum binary to target system (not in Void repos, needed for dotfiles wizard)
+    _install_gum_to_target
 
     # Unmount everything
     unmount_filesystems

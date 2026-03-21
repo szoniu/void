@@ -35,7 +35,9 @@ screen_summary() {
         summary+="GPU:          ${GPU_VENDOR:-unknown} (${GPU_DRIVER:-auto})\n"
     fi
     summary+="Nonfree repo: ${ENABLE_NONFREE:-no}\n"
+    [[ "${ENABLE_HYPRLAND:-no}" == "yes" ]] && summary+="Hyprland:     ecosystem enabled\n"
     [[ "${ENABLE_NOCTALIA:-no}" == "yes" ]] && summary+="Noctalia:     ${NOCTALIA_COMPOSITOR:-Hyprland} compositor\n"
+    [[ "${ENABLE_GAMING:-no}" == "yes" ]] && summary+="Gaming:       Steam, gamescope, MangoHud\n"
     [[ "${ASUS_ROG_DETECTED:-0}" == "1" ]] && summary+="ASUS ROG:     detected\n"
     [[ "${ENABLE_ASUSCTL:-no}" == "yes" ]] && summary+="ROG tools:    asusctl enabled\n"
     [[ "${ENABLE_FINGERPRINT:-no}" == "yes" ]] && summary+="Fingerprint:  fprintd enabled\n"

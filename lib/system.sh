@@ -263,3 +263,38 @@ system_finalize() {
 
     einfo "System finalization complete"
 }
+
+# _install_gum_to_target — Copy bundled gum binary to installed system
+# Runs OUTSIDE chroot (from run_post_install), uses MOUNTPOINT
+_install_gum_to_target() {
+    local target_bin="${MOUNTPOINT}/usr/local/bin"
+
+    # Try cached gum first (already extracted during installer run)
+    if [[ -x "${GUM_CACHE_DIR:-/tmp/void-installer-gum}/gum" ]]; then
+        mkdir -p "${target_bin}"
+        cp "${GUM_CACHE_DIR}/gum" "${target_bin}/gum" 2>/dev/null && \
+            chmod +x "${target_bin}/gum" && \
+            einfo "Installed gum to /usr/local/bin/gum"
+        return 0
+    fi
+
+    # Try bundled tarball
+    if [[ -f "${DATA_DIR:-}/gum.tar.gz" ]]; then
+        local _gum_tmp
+        _gum_tmp=$(mktemp -d)
+        if tar xzf "${DATA_DIR}/gum.tar.gz" -C "${_gum_tmp}" 2>/dev/null; then
+            local _gum_bin
+            _gum_bin=$(find "${_gum_tmp}" -name "gum" -type f | head -1)
+            if [[ -n "${_gum_bin}" ]]; then
+                mkdir -p "${target_bin}"
+                cp "${_gum_bin}" "${target_bin}/gum"
+                chmod +x "${target_bin}/gum"
+                einfo "Installed gum to /usr/local/bin/gum"
+            fi
+        fi
+        rm -rf "${_gum_tmp}"
+        return 0
+    fi
+
+    ewarn "Bundled gum not found — dotfiles wizard will download it on first run"
+}

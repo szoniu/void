@@ -12,9 +12,13 @@ desktop_install() {
     if [[ "${desktop}" == "gnome" ]]; then
         _install_gnome_desktop
         _install_gnome_apps
+        _install_gnome_lang
+        _configure_gnome_locale
     else
         _install_kde_plasma
         _install_kde_apps
+        _install_kde_lang
+        _configure_plasma_locale
     fi
 
     _install_bluetooth
@@ -190,6 +194,37 @@ _install_kde_apps() {
     einfo "KDE applications installed"
 }
 
+# _install_kde_lang — KDE language packs (Void bundles translations in main packages)
+_install_kde_lang() {
+    # Void Linux includes translations in the main KDE packages (no separate -lang/-l10n pkgs)
+    # Nothing to install — locale is configured in _configure_plasma_locale
+    return 0
+}
+
+# _configure_plasma_locale — Set Plasma locale for new users via skel
+_configure_plasma_locale() {
+    local locale="${LOCALE:-en_US.UTF-8}"
+    local lang="${locale%%_*}"
+
+    if [[ "${lang}" == "en" ]]; then
+        return 0
+    fi
+
+    einfo "Configuring Plasma locale: ${locale}"
+
+    # plasma-localerc in /etc/skel — new users get correct locale automatically
+    mkdir -p /etc/skel/.config
+    cat > /etc/skel/.config/plasma-localerc << PLEOF
+[Formats]
+LANG=${locale}
+
+[Translations]
+LANGUAGE=${lang}
+PLEOF
+
+    einfo "Plasma locale configured"
+}
+
 # _install_gnome_desktop — Install GNOME desktop
 _install_gnome_desktop() {
     einfo "Installing GNOME desktop..."
@@ -249,6 +284,46 @@ _install_gnome_apps() {
     einfo "GNOME applications installed"
 }
 
+# _install_gnome_lang — GNOME language packs (Void bundles translations in main packages)
+_install_gnome_lang() {
+    # Void Linux includes translations in the main GNOME packages (no separate -locale pkgs)
+    # Nothing to install — locale is configured in _configure_gnome_locale
+    return 0
+}
+
+# _configure_gnome_locale — Set GNOME locale for new users via dconf + skel
+_configure_gnome_locale() {
+    local locale="${LOCALE:-en_US.UTF-8}"
+    local lang="${locale%%_*}"
+
+    if [[ "${lang}" == "en" ]]; then
+        return 0
+    fi
+
+    einfo "Configuring GNOME locale: ${locale}"
+
+    # dconf profile — system-wide locale override
+    mkdir -p /etc/dconf/profile
+    cat > /etc/dconf/profile/user << 'DCONFEOF'
+user-db:user
+system-db:local
+DCONFEOF
+
+    mkdir -p /etc/dconf/db/local.d
+    cat > /etc/dconf/db/local.d/00-locale << LOCEOF
+[system/locale]
+region='${locale}'
+format-locale='${locale}'
+LOCEOF
+    dconf update 2>/dev/null || true
+
+    # Skip GNOME initial setup for new users
+    mkdir -p /etc/skel/.config
+    echo "yes" > /etc/skel/.config/gnome-initial-setup-done
+
+    einfo "GNOME locale configured"
+}
+
 # _install_bluetooth — Install Bluetooth support (auto when hardware detected)
 _install_bluetooth() {
     if [[ "${BLUETOOTH_DETECTED:-0}" != "1" ]]; then
@@ -267,10 +342,46 @@ install_hyprland_ecosystem() {
         return 0
     fi
     einfo "Installing Hyprland ecosystem..."
-    try "Installing Hyprland ecosystem" xbps-install -y \
-        Hyprland hyprpaper hypridle hyprlock \
+
+    # Per-package install with fallback — one missing package doesn't block the rest
+    local -a hypr_pkgs=(
+        Hyprland hyprpaper hypridle hyprlock
         waybar wofi mako grim slurp wl-clipboard brightnessctl
+        xdg-desktop-portal-hyprland
+    )
+
+    local pkg
+    for pkg in "${hypr_pkgs[@]}"; do
+        xbps-install -y "${pkg}" 2>/dev/null || ewarn "Package '${pkg}' not available, skipping"
+    done
+
     einfo "Hyprland ecosystem installed"
+}
+
+# install_gaming — Install gaming packages (Steam, gamescope, MangoHud)
+install_gaming() {
+    if [[ "${ENABLE_GAMING:-no}" != "yes" ]]; then
+        return 0
+    fi
+
+    einfo "Installing gaming packages..."
+
+    # Steam requires nonfree repo (32-bit libs + proprietary)
+    # Void glibc supports native Steam (no Flatpak workaround needed)
+    local -a gaming_pkgs=(
+        steam
+        gamescope
+        MangoHud
+        steam-udev-rules
+    )
+
+    local pkg
+    for pkg in "${gaming_pkgs[@]}"; do
+        xbps-install -y "${pkg}" 2>/dev/null || ewarn "Package '${pkg}' not available, skipping"
+    done
+
+    einfo "Gaming packages installed"
+    einfo "Note: Run 'steam' to complete Steam setup on first launch"
 }
 
 # install_noctalia_shell — Install Noctalia Shell + Wayland compositor

@@ -49,6 +49,9 @@ screen_extra_packages() {
     # Noctalia Shell — Wayland shell with compositor
     checklist_args+=("noctalia-shell" "Noctalia Shell (Wayland shell + compositor)" "$( [[ "${ENABLE_NOCTALIA:-no}" == "yes" ]] && echo "on" || echo "off" )")
 
+    # Gaming — Steam, gamescope, MangoHud
+    checklist_args+=("gaming" "Gaming (Steam, gamescope, MangoHud)" "$( [[ "${ENABLE_GAMING:-no}" == "yes" ]] && echo "on" || echo "off" )")
+
     checklist_args+=(
         "nonfree-repo" "Enable nonfree repository"               "$( [[ "${ENABLE_NONFREE:-no}" == "yes" ]] && echo "on" || echo "off" )"
     )
@@ -64,6 +67,7 @@ screen_extra_packages() {
     ENABLE_NONFREE="no"
     ENABLE_HYPRLAND="no"
     ENABLE_NOCTALIA="no"
+    ENABLE_GAMING="no"
     ENABLE_ASUSCTL="no"
     ENABLE_FINGERPRINT="no"
     ENABLE_THUNDERBOLT="no"
@@ -94,6 +98,11 @@ screen_extra_packages() {
             hyprland-ecosystem)
                 ENABLE_HYPRLAND="yes"
                 ;;
+            gaming)
+                ENABLE_GAMING="yes"
+                # Gaming requires nonfree repo (Steam)
+                ENABLE_NONFREE="yes"
+                ;;
             noctalia-shell)
                 ENABLE_NOCTALIA="yes"
                 # Ask which Wayland compositor to install
@@ -112,8 +121,8 @@ screen_extra_packages() {
         esac
     done
 
-    export ENABLE_NONFREE ENABLE_HYPRLAND ENABLE_NOCTALIA ENABLE_ASUSCTL \
-           ENABLE_FINGERPRINT ENABLE_THUNDERBOLT ENABLE_SENSORS ENABLE_WWAN
+    export ENABLE_NONFREE ENABLE_HYPRLAND ENABLE_NOCTALIA ENABLE_GAMING \
+           ENABLE_ASUSCTL ENABLE_FINGERPRINT ENABLE_THUNDERBOLT ENABLE_SENSORS ENABLE_WWAN
 
     # Step 2: Free-form input for additional packages
     local extra
@@ -134,6 +143,7 @@ Leave empty to skip:" \
     [[ "${ENABLE_NONFREE}" == "yes" ]] && einfo "Nonfree repository: enabled"
     [[ "${ENABLE_HYPRLAND}" == "yes" ]] && einfo "Hyprland ecosystem: enabled"
     [[ "${ENABLE_NOCTALIA}" == "yes" ]] && einfo "Noctalia Shell: enabled (compositor: ${NOCTALIA_COMPOSITOR:-Hyprland})"
+    [[ "${ENABLE_GAMING}" == "yes" ]] && einfo "Gaming: enabled (Steam, gamescope, MangoHud)"
     [[ "${ENABLE_ASUSCTL}" == "yes" ]] && einfo "ASUS ROG tools: enabled"
     [[ "${ENABLE_FINGERPRINT}" == "yes" ]] && einfo "Fingerprint reader: fprintd enabled"
     [[ "${ENABLE_THUNDERBOLT}" == "yes" ]] && einfo "Thunderbolt: bolt enabled"
