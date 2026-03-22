@@ -292,7 +292,33 @@ cd void
 - **`Permission denied (publickey)`** — Void domyślnie nie pozwala na logowanie root z hasłem. Dodaj `PermitRootLogin yes` do `/etc/ssh/sshd_config` i `sv restart sshd`.
 - **`Permission denied, please try again`** — hasło jest złe lub nie zostało ustawione. Uruchom `passwd root` ponownie na maszynie docelowej.
 
+#### Użyj tmux — ochrona przed zerwaniem sesji SSH
+
+**Ważne:** Jeśli połączenie SSH się zerwie, instalacja w zwykłej sesji zostanie przerwana. **Zawsze uruchamiaj installer w tmux:**
+
+```bash
+# Na Live ISO (po połączeniu SSH):
+xbps-install -Sy tmux
+tmux new -s install
+
+# Sklonuj repo i uruchom installer wewnątrz tmux
+git clone https://github.com/szoniu/void.git
+cd void
+./install.sh
+```
+
+Jeśli połączenie SSH się zerwie:
+```bash
+# Połącz się ponownie i wróć do sesji
+ssh root@<IP-live-ISO>
+tmux attach -t install
+```
+
+Instalacja będzie nadal działać w tle — nic nie stracisz.
+
 #### Monitorowanie z drugiego połączenia
+
+Otwórz drugie okno terminala (lub drugi panel tmux — `Ctrl+B` potem `"`):
 
 ```bash
 ssh root@<IP-live-ISO>
