@@ -25,13 +25,14 @@ lib/                    — Library modules (NEVER execute directly)
 ├── utils.sh            — try (interactive recovery, text fallback without dialog, LIVE_OUTPUT via tee), checkpoint_set/reached/validate/migrate_to_target, is_root/is_efi/has_network/ensure_dns, generate_password_hash, try_resume_from_disk, infer_config_from_partition
 ├── dialog.sh           — Wrapper gum/dialog/whiptail, primitives (msgbox/yesno/menu/radiolist/checklist/gauge/infobox/inputbox/passwordbox), wizard runner (register_wizard_screens + run_wizard), bundled gum extraction
 ├── config.sh           — config_save/load/set/get/dump/diff (${VAR@Q} quoting), validate_config()
-├── hardware.sh         — detect_cpu/gpu(multi-GPU/hybrid)/disks/esp/installed_oses, detect_asus_rog, detect_bluetooth/fingerprint/thunderbolt/sensors/webcam/wwan, serialize/deserialize_detected_oses, get_hardware_summary
+├── hardware.sh         — detect_cpu/gpu(multi-GPU/hybrid)/disks/esp/installed_oses, detect_asus_rog, detect_surface, detect_bluetooth/fingerprint/thunderbolt/sensors/webcam/wwan, serialize/deserialize_detected_oses, get_hardware_summary
 ├── disk.sh             — Two-phase: disk_plan_add/add_stdin/show/auto/dualboot → cleanup_target_disk + disk_execute_plan (sfdisk), mount/unmount_filesystems, get_uuid/get_partuuid, shrink helpers (disk_plan_shrink)
 ├── network.sh          — check_network, install_network_manager, select_fastest_mirror
 ├── rootfs.sh           — rootfs_get_url/download/verify/extract (_find_rootfs_file for resume)
-├── xbps.sh             — xbps_configure_mirror/nonfree, xbps_update (base-voidstrap → base-system swap), xbps_install_base, install_extra_packages, install_fingerprint_tools, install_thunderbolt_tools, install_sensor_tools, install_wwan_tools, install_asusctl_tools
-├── kernel.sh           — kernel_install (mainline vs lts, firmware, microcode)
+├── xbps.sh             — xbps_configure_mirror/nonfree, xbps_update (base-voidstrap → base-system swap), xbps_install_base, install_extra_packages, install_fingerprint_tools, install_thunderbolt_tools, install_sensor_tools, install_wwan_tools, install_asusctl_tools, install_surface_tools
+├── kernel.sh           — kernel_install (mainline vs lts vs surface-patched, firmware, microcode), _kernel_install_surface_patched (linux-surface patches)
 ├── bootloader.sh       — bootloader_install, _configure_grub, _mount_other_oses_for_osprober, _verify_grub_config, _verify_efi_entries
+├── secureboot.sh       — is_secureboot_active, secureboot_setup (MOK key generation, kernel signing, shim download from Fedora, EFI boot entry, kernel signing hook)
 ├── system.sh           — system_set_timezone/locale/hostname/keymap, generate_fstab, install_filesystem_tools, system_create_users, system_finalize, _enable_service
 ├── desktop.sh          — desktop_install (GPU drivers, KDE Plasma, SDDM, elogind, PipeWire, KDE apps), install_hyprland_ecosystem, install_noctalia_shell
 ├── swap.sh             — swap_setup (zramen, partition, swap file)
@@ -48,7 +49,8 @@ tui/                    — TUI screens
 ├── swap_config.sh      — screen_swap_config: zram/partition/file/none
 ├── network_config.sh   — screen_network_config: hostname + mirror
 ├── locale_config.sh    — screen_locale_config: timezone + locale + keymap
-├── kernel_select.sh    — screen_kernel_select: mainline/lts
+├── kernel_select.sh    — screen_kernel_select: mainline/lts (+ surface-patched when Surface detected)
+├── secureboot_config.sh — screen_secureboot_config: Secure Boot MOK signing yes/no (EFI only)
 ├── gpu_config.sh       — screen_gpu_config: auto/nvidia/amd/intel/none + nvidia-open + hybrid GPU display
 ├── desktop_config.sh   — screen_desktop_config: KDE apps checklist
 ├── user_config.sh      — screen_user_config: root pwd, user, groups
@@ -95,7 +97,7 @@ All config variables are defined in `CONFIG_VARS[]` in `lib/constants.sh`:
 | `TIMEZONE` | Region/City | e.g. `Europe/Warsaw` |
 | `LOCALE` | locale string | e.g. `en_US.UTF-8` |
 | `KEYMAP` | keymap name | e.g. `us`, `pl` |
-| `KERNEL_TYPE` | mainline/lts | Kernel flavor |
+| `KERNEL_TYPE` | mainline/lts/surface-patched | Kernel flavor (surface-patched compiles from source with linux-surface patches) |
 | `GPU_VENDOR` | nvidia/amd/intel/none/unknown | Detected or selected GPU |
 | `GPU_DRIVER` | nvidia/mesa-dri | Driver package recommendation |
 | `GPU_USE_NVIDIA_OPEN` | yes/no | Use open kernel module (Turing+) |
@@ -131,6 +133,10 @@ All config variables are defined in `CONFIG_VARS[]` in `lib/constants.sh`:
 | `WEBCAM_DETECTED` | 0/1 | Webcam detected |
 | `WWAN_DETECTED` | 0/1 | WWAN/LTE modem detected |
 | `ENABLE_WWAN` | yes/no | ModemManager enabled (opt-in) |
+| `SURFACE_DETECTED` | 0/1 | Microsoft Surface hardware detected |
+| `SURFACE_MODEL` | string | Surface model name (e.g. "Surface Laptop Go 3") |
+| `ENABLE_IPTSD` | yes/no | iptsd touchscreen daemon enabled (Surface, opt-in) |
+| `ENABLE_SECUREBOOT` | yes/no | Secure Boot MOK signing enabled (opt-in) |
 | `SHRINK_PARTITION` | /dev/sdXN | Partition to shrink (dual-boot) |
 | `SHRINK_PARTITION_FSTYPE` | ntfs/ext4/btrfs | Filesystem of partition to shrink |
 | `SHRINK_NEW_SIZE_MIB` | integer | New size after shrink (MiB) |
@@ -217,6 +223,49 @@ Autostart — konfiguracja w `/etc/skel/.config/{hypr,niri,sway}/`:
 - **sway**: `config` z `exec qs -c noctalia-shell`, environment.d/sway.conf, keybindami IPC
 
 Konfiguracja kopiowana także do `$HOME` użytkownika (jeśli konto już istnieje). Touchpad: `natural_scroll = false` / `disabled` we wszystkich kompozytorach.
+
+#### Microsoft Surface support
+
+`detect_surface()` in `lib/hardware.sh` — DMI detection via `sys_vendor="Microsoft Corporation"` + `product_name="Surface*"`. Sets `SURFACE_DETECTED=0/1` and `SURFACE_MODEL`.
+
+When Surface detected, `tui/kernel_select.sh` offers 3 kernel options:
+- `mainline` — standard Void binary kernel (default, good upstream Surface support)
+- `lts` — LTS binary kernel
+- `surface-patched` — compiled from source with linux-surface patches (~30-60 min)
+
+`_kernel_install_surface_patched()` in `lib/kernel.sh`:
+1. Installs standard kernel as fallback
+2. Downloads matching kernel source from kernel.org
+3. Clones `https://github.com/linux-surface/linux-surface.git`
+4. Applies patches from `patches/X.Y/` (dry-run first, skips failures)
+5. Copies Void kernel config as base, runs `make olddefconfig`
+6. Builds kernel with `-surface` extraversion
+7. Installs modules, kernel, generates initramfs with dracut
+
+`install_surface_tools()` in `lib/xbps.sh` — builds iptsd (Intel Precise Touch & Stylus daemon) from source (not in Void repos). Creates runit service at `/etc/sv/iptsd/`. Visible in extra_packages checklist when `SURFACE_DETECTED=1`.
+
+#### Secure Boot (MOK/shim)
+
+`lib/secureboot.sh` — Secure Boot via MOK (Machine Owner Key) approach. Shim downloaded from Fedora (signed by Microsoft UEFI CA). No `shim` package in Void repos.
+
+`secureboot_setup()` flow:
+1. Install `sbsigntool` + `openssl` from XBPS
+2. Generate MOK key pair: `/root/secureboot/MOK.{priv,der,pem}` (RSA 2048, 36500 days)
+3. Sign all `/boot/vmlinuz-*` kernels with `sbsign`
+4. Download `shimx64.efi` + `mmx64.efi` from Fedora koji RPM, extract with `bsdtar`
+5. Copy to `/boot/efi/EFI/Void/`, sign GRUB with MOK key
+6. Create EFI boot entry "Void (Secure Boot)" → `\EFI\Void\shimx64.efi`
+7. Try `mokutil --import` for enrollment (optional, mokutil may not be available)
+8. Copy `MOK.der` to ESP as fallback for manual MokManager enrollment
+9. Create kernel signing hook at `/etc/kernel.d/post-install/20-secureboot-sign`
+
+Boot chain: `Firmware → shimx64.efi (Microsoft-signed) → grubx64.efi (MOK-signed) → vmlinuz (MOK-signed)`
+
+MOK enrollment password: `void`. At first boot, MokManager appears → "Enroll MOK" → password: `void`.
+
+TUI screen `tui/secureboot_config.sh` — shown only on EFI systems, after kernel_select. Yes/no dialog explaining MOK process. Different message based on current Secure Boot state.
+
+Checkpoint: `secureboot` — runs after `bootloader`, before `swap_setup`.
 
 #### /etc/rc.conf for hostname and keymap
 
@@ -404,6 +453,13 @@ All tests are standalone — they do not require root or hardware. They use `DRY
 - **Dual-boot partition detection with `sfdisk --append`**: When creating a new partition in free space for dual-boot, `sfdisk --append` may assign a different partition number than expected. After `disk_execute_plan()`, the installer verifies `ROOT_PARTITION` exists and re-scans if necessary.
 - **os-prober mount/unmount cycle**: For accurate GRUB dual-boot detection, other OS partitions must be mounted before `grub-mkconfig`. The installer mounts detected OS partitions read-only in `/mnt/osprober-*`, runs grub-mkconfig, then unmounts them. Missing this step causes os-prober to miss Windows/Linux entries.
 - **`blkid` parsing without `eval`**: The ESP detection code in `hardware.sh` parses `blkid -o export` output line-by-line using `read` and `case` instead of `eval` — safe against injection via partition labels.
+- **Secure Boot shim download requires network**: `_setup_shim()` downloads shim RPM from Fedora koji. If network fails in chroot, `try` provides recovery. The shim is extracted with `bsdtar` (libarchive, in Void base).
+- **mokutil may not be in Void repos**: `_enroll_mok()` tries `xbps-install -y mokutil` but doesn't fail if unavailable. Fallback: MOK.der is copied to ESP for manual enrollment via MokManager UI at boot.
+- **iptsd built from source**: Not in Void repos. `install_surface_tools()` clones from GitHub, builds with meson/ninja, creates runit service manually. Build deps: meson, ninja, gcc, inih-devel, fmt-devel, spdlog-devel, eigen, cli11.
+- **Surface kernel compilation time**: `_kernel_install_surface_patched()` compiles kernel from source (~30-60 min on Surface Laptop Go 3). Standard kernel is installed first as fallback. If compilation fails, user can continue with fallback kernel.
+- **linux-surface patches may not apply cleanly**: Patches are version-matched to `patches/X.Y/` directory. If no exact match, uses highest available version. Each patch is dry-run first; failures are skipped gracefully with warnings.
+- **Kernel signing hook for XBPS updates**: `/etc/kernel.d/post-install/20-secureboot-sign` auto-signs kernels on XBPS kernel updates. Requires `/root/secureboot/MOK.priv` to exist.
+- **Surface detection via DMI**: `detect_surface()` reads `sys_vendor` (not `board_vendor` like ASUS ROG). Matches `"Microsoft Corporation"` + `product_name == Surface*`.
 
 ## Debugging during live installation
 

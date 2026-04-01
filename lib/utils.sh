@@ -735,6 +735,16 @@ _infer_kernel_type() {
         return 0
     fi
 
+    # Check for Surface-patched kernel (vmlinuz with "surface" in name)
+    local vmlinuz
+    for vmlinuz in "${mp}"/boot/vmlinuz-*surface*; do
+        if [[ -f "${vmlinuz}" ]]; then
+            KERNEL_TYPE="surface-patched"
+            export KERNEL_TYPE
+            return 0
+        fi
+    done
+
     # Check for default linux package (e.g. .linux-6.x.y_1.x86_64.plist)
     # Void's mainline kernel package is "linux" (no "mainline" suffix)
     if ls "${pkgdb}"/.linux-[0-9]* &>/dev/null 2>&1; then
@@ -807,6 +817,43 @@ _infer_sufficient_config() {
     return 0
 }
 
+# _infer_surface_from_installed — Detect Surface tools from installed system
+_infer_surface_from_installed() {
+    local mp="$1"
+
+    # Check for iptsd binary or runit service
+    if [[ -x "${mp}/usr/bin/iptsd" ]] || [[ -d "${mp}/etc/sv/iptsd" ]]; then
+        ENABLE_IPTSD="yes"
+        export ENABLE_IPTSD
+    fi
+}
+
+# _infer_secureboot_from_installed — Detect Secure Boot setup from installed system
+_infer_secureboot_from_installed() {
+    local mp="$1"
+
+    # Check for MOK keys
+    if [[ -f "${mp}/root/secureboot/MOK.priv" ]]; then
+        ENABLE_SECUREBOOT="yes"
+        export ENABLE_SECUREBOOT
+        return 0
+    fi
+
+    # Check for shim on ESP
+    if [[ -f "${mp}/boot/efi/EFI/Void/shimx64.efi" ]]; then
+        ENABLE_SECUREBOOT="yes"
+        export ENABLE_SECUREBOOT
+        return 0
+    fi
+
+    # Check for kernel signing hook
+    if [[ -f "${mp}/etc/kernel.d/post-install/20-secureboot-sign" ]]; then
+        ENABLE_SECUREBOOT="yes"
+        export ENABLE_SECUREBOOT
+        return 0
+    fi
+}
+
 # infer_config_from_partition — Read config from an installed system's files
 # Usage: infer_config_from_partition /dev/sdX2 ext4
 # Returns: 0 = sufficient config inferred, 1 = insufficient
@@ -850,6 +897,8 @@ infer_config_from_partition() {
     _infer_from_keymap "${mp}"
     _infer_kernel_type "${mp}"
     _infer_swap_type "${mp}"
+    _infer_surface_from_installed "${mp}"
+    _infer_secureboot_from_installed "${mp}"
     _infer_partition_scheme
 
     # Cleanup

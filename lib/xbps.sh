@@ -160,3 +160,62 @@ install_asusctl_tools() {
     _enable_service "asusd"
     einfo "ASUS ROG tools installed"
 }
+
+# install_surface_tools — Install Surface touchscreen daemon (iptsd) from source
+install_surface_tools() {
+    if [[ "${ENABLE_IPTSD:-no}" != "yes" ]]; then
+        return 0
+    fi
+
+    einfo "Installing Surface tools (iptsd from source)..."
+
+    # iptsd is not in Void repos — build from source
+    try "Installing iptsd build dependencies" \
+        xbps-install -y git meson ninja gcc pkg-config \
+        inih-devel fmt-devel spdlog-devel eigen cli11
+
+    local iptsd_src="/tmp/iptsd-build"
+    rm -rf "${iptsd_src}"
+
+    try "Cloning iptsd" \
+        git clone --depth 1 https://github.com/linux-surface/iptsd.git "${iptsd_src}"
+
+    try "Configuring iptsd" \
+        meson setup "${iptsd_src}/build" "${iptsd_src}" \
+        -Dprefix=/usr -Dsystemd=false -Dservice_manager=none
+
+    try "Building iptsd" \
+        ninja -C "${iptsd_src}/build"
+
+    try "Installing iptsd" \
+        ninja -C "${iptsd_src}/build" install
+
+    # Create runit service (Void-specific — Gentoo uses systemd/OpenRC)
+    _create_iptsd_runit_service
+
+    _enable_service "iptsd"
+
+    rm -rf "${iptsd_src}"
+    einfo "Surface tools installed"
+}
+
+# _create_iptsd_runit_service — Create runit service for iptsd daemon
+_create_iptsd_runit_service() {
+    local sv_dir="/etc/sv/iptsd"
+    mkdir -p "${sv_dir}/log"
+
+    cat > "${sv_dir}/run" << 'IPTSDEOF'
+#!/bin/sh
+exec iptsd
+IPTSDEOF
+    chmod +x "${sv_dir}/run"
+
+    cat > "${sv_dir}/log/run" << 'LOGEOF'
+#!/bin/sh
+exec svlogd -tt /var/log/iptsd
+LOGEOF
+    chmod +x "${sv_dir}/log/run"
+    mkdir -p /var/log/iptsd
+
+    einfo "Created runit service for iptsd"
+}

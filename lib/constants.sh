@@ -59,6 +59,7 @@ readonly -a CHECKPOINTS=(
     "fstab"
     "networking"
     "bootloader"
+    "secureboot"
     "swap_setup"
     "desktop"
     "users"
@@ -118,6 +119,10 @@ readonly -a CONFIG_VARS=(
     WEBCAM_DETECTED
     WWAN_DETECTED
     ENABLE_WWAN
+    SURFACE_DETECTED
+    SURFACE_MODEL
+    ENABLE_IPTSD
+    ENABLE_SECUREBOOT
     SHRINK_PARTITION
     SHRINK_PARTITION_FSTYPE
     SHRINK_NEW_SIZE_MIB

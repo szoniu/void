@@ -2,7 +2,8 @@
 
 ## Port from Gentoo
 
-- [ ] Secure Boot support (shim + MOK) — `lib/secureboot.sh` + `tui/secureboot_config.sh`
+- [x] Secure Boot support (shim + MOK) — `lib/secureboot.sh` + `tui/secureboot_config.sh`
+- [x] Microsoft Surface support — `detect_surface()`, Surface-patched kernel, iptsd
 - [ ] Desktop type selection (Plasma vs none/server) — `tui/desktop_select.sh`
 - [ ] test_hybrid_gpu.sh — port from gentoo `tests/test_hybrid_gpu.sh`
 - [ ] test_validate.sh — port from gentoo `tests/test_validate.sh`

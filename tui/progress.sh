@@ -143,11 +143,25 @@ screen_progress() {
     exec 2>&4
     exec 4>&-
 
-    dialog_msgbox "Installation Complete" \
-        "Void Linux has been successfully installed!\n\n\
-You can now reboot into your new system.\n\
-Remember to remove the installation media.\n\n\
-Log file: ${LOG_FILE}"
+    local complete_msg=""
+    complete_msg+="Void Linux has been successfully installed!\n\n"
+    complete_msg+="You can now reboot into your new system.\n"
+    complete_msg+="Remember to remove the installation media.\n"
+
+    if [[ "${ENABLE_SECUREBOOT:-no}" == "yes" ]]; then
+        complete_msg+="\n--- SECURE BOOT ---\n"
+        if is_secureboot_active 2>/dev/null; then
+            complete_msg+="At first reboot, MokManager will appear.\n"
+        else
+            complete_msg+="After installation, enable Secure Boot in BIOS/UEFI.\n"
+            complete_msg+="Then reboot — MokManager will appear.\n"
+        fi
+        complete_msg+="Select 'Enroll MOK' -> verify key -> password: void\n"
+    fi
+
+    complete_msg+="\nLog file: ${LOG_FILE}"
+
+    dialog_msgbox "Installation Complete" "${complete_msg}"
 
     return "${TUI_NEXT}"
 }

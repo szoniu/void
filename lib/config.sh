@@ -163,8 +163,12 @@ validate_config() {
     fi
 
     if [[ -n "${KERNEL_TYPE:-}" ]] && \
-       [[ "${KERNEL_TYPE}" != "mainline" && "${KERNEL_TYPE}" != "lts" ]]; then
-        errors+=("KERNEL_TYPE='${KERNEL_TYPE}' — must be mainline or lts")
+       [[ "${KERNEL_TYPE}" != "mainline" && "${KERNEL_TYPE}" != "lts" && "${KERNEL_TYPE}" != "surface-patched" ]]; then
+        errors+=("KERNEL_TYPE='${KERNEL_TYPE}' — must be mainline, lts, or surface-patched")
+    fi
+
+    if [[ "${ENABLE_SECUREBOOT:-no}" == "yes" && -z "${ESP_PARTITION:-}" ]]; then
+        errors+=("ENABLE_SECUREBOOT=yes requires ESP_PARTITION to be set")
     fi
 
     if [[ -n "${DESKTOP_TYPE:-}" ]] && \

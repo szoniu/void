@@ -43,6 +43,7 @@ source "${LIB_DIR}/rootfs.sh"
 source "${LIB_DIR}/xbps.sh"
 source "${LIB_DIR}/kernel.sh"
 source "${LIB_DIR}/bootloader.sh"
+source "${LIB_DIR}/secureboot.sh"
 source "${LIB_DIR}/system.sh"
 source "${LIB_DIR}/desktop.sh"
 source "${LIB_DIR}/swap.sh"
@@ -60,6 +61,7 @@ source "${TUI_DIR}/swap_config.sh"
 source "${TUI_DIR}/network_config.sh"
 source "${TUI_DIR}/locale_config.sh"
 source "${TUI_DIR}/kernel_select.sh"
+source "${TUI_DIR}/secureboot_config.sh"
 source "${TUI_DIR}/gpu_config.sh"
 source "${TUI_DIR}/desktop_select.sh"
 source "${TUI_DIR}/desktop_config.sh"
@@ -198,6 +200,7 @@ run_configuration_wizard() {
         screen_network_config \
         screen_locale_config \
         screen_kernel_select \
+        screen_secureboot_config \
         screen_gpu_config \
         screen_desktop_select \
         screen_desktop_config \
@@ -298,6 +301,17 @@ _do_chroot_phases() {
         einfo "Skipping bootloader (checkpoint reached)"
     fi
 
+    # Phase 10b: Secure Boot
+    if ! checkpoint_reached "secureboot"; then
+        einfo "--- Phase: Secure Boot ---"
+        maybe_exec 'before_secureboot'
+        secureboot_setup
+        maybe_exec 'after_secureboot'
+        checkpoint_set "secureboot"
+    else
+        einfo "Skipping secureboot (checkpoint reached)"
+    fi
+
     # Phase 11: Swap
     if ! checkpoint_reached "swap_setup"; then
         einfo "--- Phase: Swap ---"
@@ -345,6 +359,7 @@ _do_chroot_phases() {
         install_sensor_tools
         install_wwan_tools
         install_asusctl_tools
+        install_surface_tools
         maybe_exec 'after_extras'
         checkpoint_set "extras"
     else

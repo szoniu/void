@@ -44,6 +44,9 @@ screen_summary() {
     [[ "${ENABLE_THUNDERBOLT:-no}" == "yes" ]] && summary+="Thunderbolt:  bolt enabled\n"
     [[ "${ENABLE_SENSORS:-no}" == "yes" ]] && summary+="IIO sensors:  iio-sensor-proxy enabled\n"
     [[ "${ENABLE_WWAN:-no}" == "yes" ]] && summary+="WWAN LTE:     ModemManager enabled\n"
+    [[ "${SURFACE_DETECTED:-0}" == "1" ]] && summary+="Surface:      ${SURFACE_MODEL:-detected}\n"
+    [[ "${ENABLE_IPTSD:-no}" == "yes" ]] && summary+="Surface tools: iptsd touchscreen\n"
+    [[ "${ENABLE_SECUREBOOT:-no}" == "yes" ]] && summary+="Secure Boot:  MOK signing enabled\n"
     summary+="\n"
     summary+="Username:     ${USERNAME:-user}\n"
     if [[ "${DESKTOP_TYPE:-kde}" == "gnome" ]]; then

@@ -43,6 +43,11 @@ screen_extra_packages() {
         checklist_args+=("wwan-tools" "WWAN LTE modem support (ModemManager)" "on")
     fi
 
+    # Conditional: Surface touchscreen daemon (only shown when Surface hardware detected)
+    if [[ "${SURFACE_DETECTED:-0}" == "1" ]]; then
+        checklist_args+=("surface-tools" "Surface touchscreen daemon (iptsd)" "on")
+    fi
+
     # Hyprland ecosystem — standalone Wayland desktop
     checklist_args+=("hyprland-ecosystem" "Hyprland + ekosystem (waybar, wofi, mako, grim...)" "$( [[ "${ENABLE_HYPRLAND:-no}" == "yes" ]] && echo "on" || echo "off" )")
 
@@ -73,6 +78,7 @@ screen_extra_packages() {
     ENABLE_THUNDERBOLT="no"
     ENABLE_SENSORS="no"
     ENABLE_WWAN="no"
+    ENABLE_IPTSD="no"
 
     local item
     for item in ${cleaned}; do
@@ -94,6 +100,9 @@ screen_extra_packages() {
                 ;;
             wwan-tools)
                 ENABLE_WWAN="yes"
+                ;;
+            surface-tools)
+                ENABLE_IPTSD="yes"
                 ;;
             hyprland-ecosystem)
                 ENABLE_HYPRLAND="yes"
@@ -122,7 +131,8 @@ screen_extra_packages() {
     done
 
     export ENABLE_NONFREE ENABLE_HYPRLAND ENABLE_NOCTALIA ENABLE_GAMING \
-           ENABLE_ASUSCTL ENABLE_FINGERPRINT ENABLE_THUNDERBOLT ENABLE_SENSORS ENABLE_WWAN
+           ENABLE_ASUSCTL ENABLE_FINGERPRINT ENABLE_THUNDERBOLT ENABLE_SENSORS ENABLE_WWAN \
+           ENABLE_IPTSD
 
     # Step 2: Free-form input for additional packages
     local extra
@@ -149,5 +159,6 @@ Leave empty to skip:" \
     [[ "${ENABLE_THUNDERBOLT}" == "yes" ]] && einfo "Thunderbolt: bolt enabled"
     [[ "${ENABLE_SENSORS}" == "yes" ]] && einfo "IIO sensors: iio-sensor-proxy enabled"
     [[ "${ENABLE_WWAN}" == "yes" ]] && einfo "WWAN LTE: ModemManager enabled"
+    [[ "${ENABLE_IPTSD}" == "yes" ]] && einfo "Surface tools: iptsd enabled"
     return "${TUI_NEXT}"
 }
