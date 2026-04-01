@@ -172,7 +172,7 @@ install_surface_tools() {
     # iptsd is not in Void repos — build from source
     try "Installing iptsd build dependencies" \
         xbps-install -y git meson ninja gcc pkg-config \
-        inih-devel fmt-devel spdlog-devel eigen cli11
+        inih-devel fmt-devel spdlog eigen cli11
 
     local iptsd_src="/tmp/iptsd-build"
     rm -rf "${iptsd_src}"

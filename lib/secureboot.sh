@@ -49,6 +49,7 @@ secureboot_setup() {
     # 1. Install required packages
     try "Installing sbsigntool" xbps-install -y sbsigntool
     try "Installing openssl" xbps-install -y openssl
+    try "Installing bsdtar" xbps-install -y bsdtar
 
     # 2. Generate MOK key pair (if not already present)
     if [[ ! -f "${key_dir}/MOK.priv" || ! -f "${key_dir}/MOK.der" ]]; then
