@@ -158,6 +158,9 @@ SDDMEOF
         cp /usr/share/pipewire/pipewire.conf /etc/pipewire/
     fi
 
+    # PipeWire XDG autostart (Void uses runit — no system service for PipeWire)
+    _create_pipewire_autostart
+
     einfo "KDE Plasma installed"
 }
 
@@ -258,6 +261,9 @@ _install_gnome_desktop() {
         cp /usr/share/pipewire/pipewire.conf /etc/pipewire/
     fi
 
+    # PipeWire XDG autostart (Void uses runit — no system service for PipeWire)
+    _create_pipewire_autostart
+
     einfo "GNOME installed"
 }
 
@@ -322,6 +328,26 @@ LOCEOF
     echo "yes" > /etc/skel/.config/gnome-initial-setup-done
 
     einfo "GNOME locale configured"
+}
+
+# _create_pipewire_autostart — Create XDG autostart entries for PipeWire
+# Void uses runit (no systemd user services), so PipeWire must start per-user via XDG autostart
+_create_pipewire_autostart() {
+    local autostart_dir="/etc/xdg/autostart"
+    mkdir -p "${autostart_dir}"
+
+    local svc
+    for svc in pipewire pipewire-pulse wireplumber; do
+        cat > "${autostart_dir}/${svc}.desktop" << PWEOF
+[Desktop Entry]
+Type=Application
+Name=${svc}
+Exec=/usr/bin/${svc}
+X-KDE-autostart-phase=0
+PWEOF
+    done
+
+    einfo "PipeWire XDG autostart entries created"
 }
 
 # _install_bluetooth — Install Bluetooth support (auto when hardware detected)
