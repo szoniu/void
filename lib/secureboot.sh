@@ -215,29 +215,30 @@ _enroll_mok() {
     fi
 
     # Generate password hash for MOK enrollment
-    local pw_hash_file
-    pw_hash_file=$(mktemp /tmp/mok-pw-hash.XXXXXX)
-    trap 'rm -f "${pw_hash_file}"' RETURN
+    local pw_hash_file=""
+    pw_hash_file=$(mktemp /tmp/mok-pw-hash.XXXXXX) || true
 
-    mokutil --generate-hash="${_MOK_PASSWORD}" > "${pw_hash_file}" 2>/dev/null || true
+    if [[ -n "${pw_hash_file}" ]]; then
+        mokutil --generate-hash="${_MOK_PASSWORD}" > "${pw_hash_file}" 2>/dev/null || true
 
-    if [[ -s "${pw_hash_file}" ]]; then
-        # mokutil --import may fail when Secure Boot is disabled in firmware
-        # (EFI variables not writable). This is expected — enrollment happens
-        # via MokManager at first boot instead. Never abort on failure here.
-        if mokutil --import "${der}" --hash-file "${pw_hash_file}" 2>/dev/null; then
-            einfo "MOK queued for enrollment (password: ${_MOK_PASSWORD})"
+        if [[ -s "${pw_hash_file}" ]]; then
+            if mokutil --import "${der}" --hash-file "${pw_hash_file}" 2>/dev/null; then
+                einfo "MOK queued for enrollment (password: ${_MOK_PASSWORD})"
+            else
+                ewarn "mokutil --import failed (expected if Secure Boot is disabled)"
+                ewarn "MOK enrollment will happen via MokManager at first boot"
+            fi
         else
-            ewarn "mokutil --import failed (expected if Secure Boot is disabled)"
-            ewarn "MOK enrollment will happen via MokManager at first boot"
+            ewarn "Could not generate MOK password hash — manual enrollment required"
+            ewarn "MokManager will appear at first boot -> Enroll key from disk"
         fi
-        if ! is_secureboot_active; then
-            ewarn "Secure Boot is disabled — after enabling in BIOS/UEFI:"
-            ewarn "  MokManager will appear -> Enroll MOK -> password: ${_MOK_PASSWORD}"
-        fi
-    else
-        ewarn "Could not generate MOK password hash — manual enrollment required"
-        ewarn "MokManager will appear at first boot -> Enroll key from disk"
+
+        rm -f "${pw_hash_file}"
+    fi
+
+    if ! is_secureboot_active; then
+        ewarn "Secure Boot is disabled — after enabling in BIOS/UEFI:"
+        ewarn "  MokManager will appear -> Enroll MOK -> password: ${_MOK_PASSWORD}"
     fi
 }
 
