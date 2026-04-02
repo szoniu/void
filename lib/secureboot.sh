@@ -47,9 +47,7 @@ secureboot_setup() {
     chmod 700 "${key_dir}"
 
     # 1. Install required packages
-    try "Installing sbsigntool" xbps-install -y sbsigntool
-    try "Installing openssl" xbps-install -y openssl
-    try "Installing bsdtar" xbps-install -y bsdtar
+    try "Installing Secure Boot tools" xbps-install -y sbsigntool openssl bsdtar curl
 
     # 2. Generate MOK key pair (if not already present)
     if [[ ! -f "${key_dir}/MOK.priv" || ! -f "${key_dir}/MOK.der" ]]; then
@@ -224,20 +222,22 @@ _enroll_mok() {
     mokutil --generate-hash="${_MOK_PASSWORD}" > "${pw_hash_file}" 2>/dev/null || true
 
     if [[ -s "${pw_hash_file}" ]]; then
-        local import_rc=0
-        try "Queuing MOK enrollment" \
-            mokutil --import "${der}" --hash-file "${pw_hash_file}" || import_rc=$?
-        if [[ ${import_rc} -eq 0 ]]; then
+        # mokutil --import may fail when Secure Boot is disabled in firmware
+        # (EFI variables not writable). This is expected — enrollment happens
+        # via MokManager at first boot instead. Never abort on failure here.
+        if mokutil --import "${der}" --hash-file "${pw_hash_file}" 2>/dev/null; then
             einfo "MOK queued for enrollment (password: ${_MOK_PASSWORD})"
+        else
+            ewarn "mokutil --import failed (expected if Secure Boot is disabled)"
+            ewarn "MOK enrollment will happen via MokManager at first boot"
         fi
         if ! is_secureboot_active; then
-            ewarn "Secure Boot is disabled — MOK enrollment may not persist"
-            ewarn "After enabling Secure Boot, if MokManager does not appear, run:"
-            ewarn "  mokutil --import '${der}' (password: ${_MOK_PASSWORD})"
+            ewarn "Secure Boot is disabled — after enabling in BIOS/UEFI:"
+            ewarn "  MokManager will appear -> Enroll MOK -> password: ${_MOK_PASSWORD}"
         fi
     else
         ewarn "Could not generate MOK password hash — manual enrollment required"
-        ewarn "Run: mokutil --import '${der}'"
+        ewarn "MokManager will appear at first boot -> Enroll key from disk"
     fi
 }
 
