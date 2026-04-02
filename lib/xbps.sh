@@ -107,14 +107,51 @@ install_extra_packages() {
     einfo "Extra packages installed"
 }
 
-# install_fingerprint_tools — Install fingerprint reader support
+# install_fingerprint_tools — Install fingerprint reader support + PAM config
 install_fingerprint_tools() {
     if [[ "${ENABLE_FINGERPRINT:-no}" != "yes" ]]; then
         return 0
     fi
     einfo "Installing fingerprint reader support..."
     try "Installing fprintd" xbps-install -y fprintd libfprint
-    einfo "Fingerprint support installed"
+
+    # Configure PAM for fingerprint authentication
+    # fprintd on Void uses D-Bus activation (no runit service needed)
+    # pam_fprintd.so is installed by fprintd to /usr/lib/security/
+    _configure_fingerprint_pam
+
+    einfo "Fingerprint support installed (PAM configured for SDDM + KDE lock screen)"
+}
+
+# _configure_fingerprint_pam — Add pam_fprintd.so to PAM configs
+# Enables fingerprint auth for: SDDM login, KDE lock screen, sudo
+_configure_fingerprint_pam() {
+    local pam_line="auth    sufficient    pam_fprintd.so"
+
+    # SDDM login
+    if [[ -f /etc/pam.d/sddm ]]; then
+        if ! grep -q "pam_fprintd" /etc/pam.d/sddm 2>/dev/null; then
+            sed -i "1a\\${pam_line}" /etc/pam.d/sddm
+            einfo "PAM: fingerprint enabled for SDDM login"
+        fi
+    fi
+
+    # KDE lock screen (kscreenlocker)
+    if [[ -f /etc/pam.d/kde ]]; then
+        if ! grep -q "pam_fprintd" /etc/pam.d/kde 2>/dev/null; then
+            sed -i "1a\\${pam_line}" /etc/pam.d/kde
+            einfo "PAM: fingerprint enabled for KDE lock screen"
+        fi
+    fi
+
+    # system-auth (fallback — covers login, su, etc.)
+    if [[ -f /etc/pam.d/system-auth ]]; then
+        if ! grep -q "pam_fprintd" /etc/pam.d/system-auth 2>/dev/null; then
+            # Insert before first auth line
+            sed -i "/^auth.*pam_unix/i\\${pam_line}" /etc/pam.d/system-auth
+            einfo "PAM: fingerprint enabled for system-auth"
+        fi
+    fi
 }
 
 # install_thunderbolt_tools — Install Thunderbolt device manager
