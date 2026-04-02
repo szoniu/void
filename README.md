@@ -23,9 +23,11 @@ Na Windows użyj [Rufus](https://rufus.ie) lub [balenaEtcher](https://etcher.bal
 ### 2. Bootuj z pendrive
 
 - Wejdź do BIOS/UEFI (zwykle F2, F12, Del przy starcie)
-- **Wyłącz Secure Boot** (NVIDIA drivers tego wymagają)
+- **Secure Boot** — możesz zostawić włączony (installer obsługuje MOK signing) lub wyłączyć
 - Ustaw boot z USB
 - Wybierz opcję **UEFI** (nie Legacy/CSM!)
+
+> **Surface:** Vol+ przy starcie → UEFI. Vol- przy starcie → boot menu (wybierz USB).
 
 Void Live ISO loguje automatycznie jako `root` (hasło: `voidlinux`).
 
@@ -81,7 +83,7 @@ cd void
 >
 > **`Permission denied (publickey)`?** Użyj adresu HTTPS (jak wyżej), nie SSH (`git@github.com:...`). Live ISO nie ma Twoich kluczy SSH.
 
-Installer poprowadzi Cię przez 15 ekranów konfiguracji, a potem zainstaluje wszystko automatycznie.
+Installer poprowadzi Cię przez 17 ekranów konfiguracji, a potem zainstaluje wszystko automatycznie.
 
 ### 5. Po instalacji
 
@@ -112,40 +114,44 @@ sudo xbps-install -Su
 ## Wymagania
 
 - Komputer z **UEFI** (nie Legacy BIOS)
-- **Secure Boot wyłączony**
+- **Secure Boot** — obsługiwany (MOK/shim) lub wyłączony
 - Minimum **10 GiB** wolnego miejsca na dysku docelowym
 - Połączenie z internetem (LAN lub WiFi)
 - Bootowalny pendrive z Void Live ISO (lub dowolne live z `bash` i `git`)
 
 ## Co robi installer
 
-15 ekranów TUI prowadzi przez:
+17 ekranów TUI prowadzi przez:
 
 | # | Ekran | Co konfigurujesz |
 |---|-------|-------------------|
 | 1 | Welcome | Sprawdzenie wymagań (root, UEFI, sieć) |
 | 2 | Preset | Opcjonalne załadowanie gotowej konfiguracji |
-| 3 | Hardware | Podgląd wykrytego CPU, GPU, dysków, peryferiali, zainstalowanych OS-ów |
+| 3 | Hardware | Podgląd wykrytego CPU, GPU, dysków, peryferiali, zainstalowanych OS-ów (w tym Microsoft Surface i Secure Boot) |
 | 4 | Dysk | Wybór dysku + schemat (auto/dual-boot/manual) + shrink wizard |
 | 5 | Filesystem | ext4 / btrfs (ze subvolumes) / XFS |
 | 6 | Swap | zram (domyślnie) / partycja / plik / brak |
 | 7 | Sieć | Hostname + mirror Void |
 | 8 | Locale | Timezone, język, keymap |
-| 9 | Kernel | mainline (rolling) lub LTS (stabilny) |
-| 10 | GPU | Auto-wykryty sterownik + hybrid GPU (PRIME offload) + NVIDIA open |
-| 11 | Desktop | KDE Plasma + wybór aplikacji (Firefox, Thunderbird, Kate...) |
-| 12 | Użytkownicy | Hasło root, konto użytkownika, grupy |
-| 13 | Pakiety | Dodatkowe pakiety + wykryte peryferiale (Bluetooth, fingerprint, Thunderbolt, IIO sensors, webcam, WWAN) + ASUS ROG/TUF tools (asusctl) + opcjonalny ekosystem Hyprland + Noctalia Shell (z wyborem kompozytora: Hyprland/niri/sway) |
-| 14 | Preset save | Opcjonalny eksport konfiguracji na przyszłość |
-| 15 | Podsumowanie | Pełny przegląd + potwierdzenie "YES" + countdown |
+| 9 | Kernel | mainline (rolling) / LTS (stabilny) / surface-patched (kompilowany ze źródeł, na Surface) |
+| 10 | Secure Boot | Opcjonalne podpisanie kernela i GRUB-a (MOK/shim). Tylko na EFI. |
+| 11 | GPU | Auto-wykryty sterownik + hybrid GPU (PRIME offload) + NVIDIA open |
+| 12 | Desktop | KDE/GNOME + wybór aplikacji (Firefox, Thunderbird, Kate...) |
+| 13 | Użytkownicy | Hasło root, konto użytkownika, grupy |
+| 14 | Pakiety | Dodatkowe pakiety + wykryte peryferiale (Bluetooth, fingerprint, Thunderbolt, IIO sensors, webcam, WWAN) + ASUS ROG/TUF tools + Surface tools (iptsd) + Hyprland + Noctalia Shell |
+| 15 | Preset save | Opcjonalny eksport konfiguracji na przyszłość |
+| 16 | Podsumowanie | Pełny przegląd + potwierdzenie "YES" + countdown |
+| 17 | Instalacja | Progress bar + live output z chroot |
 
 ### Wykrywanie hardware
 
 Installer automatycznie wykrywa i konfiguruje:
 
 - **GPU** — NVIDIA, AMD, Intel. W laptopach z dwoma kartami (np. Intel iGPU + NVIDIA dGPU) wykrywa **hybrid GPU** i konfiguruje PRIME render offload. Obsługuje NVIDIA open kernel module (Turing+).
+- **Microsoft Surface** — wykrywanie przez DMI (sys_vendor + product_name). Oferuje kernel surface-patched (kompilacja ze źródeł z patchami linux-surface) i iptsd (touchscreen daemon dla urządzeń z IPTS). Surface Laptop Go nie wymaga iptsd — touchscreen działa na standardowym kernelu.
 - **ASUS ROG/TUF** — wykrywanie przez DMI sysfs. Gdy wykryty, oferuje instalację `asusctl` (sterowanie wentylatorami, RGB, profile wydajności) z serwisem `asusd`.
-- **Peryferiale** — 6 automatycznych detekcji: Bluetooth, czytnik linii papilarnych (fprintd), Thunderbolt (bolt), czujniki IIO (iio-sensor-proxy), kamera, WWAN/LTE (ModemManager). Wykryte urządzenia pojawiają się jako opcje w ekranie pakietów.
+- **Secure Boot** — wykrywanie stanu EFI. Opcjonalne podpisywanie kernela i GRUB-a kluczem MOK, shim z Fedory (podpisany przez Microsoft UEFI CA). Przy pierwszym restarcie MokManager pyta o enrollment klucza (hasło: `void`). Hook w `/etc/kernel.d/` automatycznie podpisuje kernel przy aktualizacjach XBPS.
+- **Peryferiale** — 6 automatycznych detekcji: Bluetooth, czytnik linii papilarnych (fprintd + PAM config dla SDDM/KDE), Thunderbolt (bolt), czujniki IIO (iio-sensor-proxy), kamera, WWAN/LTE (ModemManager). Wykryte urządzenia pojawiają się jako opcje w ekranie pakietów.
 
 ### Opcjonalne środowiska Wayland
 
@@ -388,7 +394,7 @@ chmod +x hooks/before_install.sh
 # Edytuj hook...
 ```
 
-Dostępne hooki: `before_install`, `after_install`, `before_preflight`, `after_preflight`, `before_disks`, `after_disks`, `before_rootfs`, `after_rootfs`, `before_xbps_preconfig`, `after_xbps_preconfig`, `before_xbps_update`, `after_xbps_update`, `before_system_config`, `after_system_config`, `before_kernel`, `after_kernel`, `before_fstab`, `after_fstab`, `before_networking`, `after_networking`, `before_bootloader`, `after_bootloader`, `before_swap`, `after_swap`, `before_desktop`, `after_desktop`, `before_users`, `after_users`, `before_extras`, `after_extras`, `before_finalize`, `after_finalize`.
+Dostępne hooki: `before_install`, `after_install`, `before_preflight`, `after_preflight`, `before_disks`, `after_disks`, `before_rootfs`, `after_rootfs`, `before_xbps_preconfig`, `after_xbps_preconfig`, `before_xbps_update`, `after_xbps_update`, `before_system_config`, `after_system_config`, `before_kernel`, `after_kernel`, `before_fstab`, `after_fstab`, `before_networking`, `after_networking`, `before_bootloader`, `after_bootloader`, `before_secureboot`, `after_secureboot`, `before_swap`, `after_swap`, `before_desktop`, `after_desktop`, `before_users`, `after_users`, `before_extras`, `after_extras`, `before_finalize`, `after_finalize`.
 
 ## Opcje CLI
 
@@ -444,13 +450,16 @@ TODO.md                 — Planowane ulepszenia
 ## FAQ
 
 **P: Jak długo trwa instalacja?**
-Void instaluje pakiety binarne (XBPS), więc 15-30 minut w zależności od łącza. Nie kompiluje niczego ze źródeł.
+Void instaluje pakiety binarne (XBPS), więc 15-30 minut w zależności od łącza. Wyjątek: kernel `surface-patched` kompiluje kernel ze źródeł (~30-60 min) i iptsd ze źródeł (~2 min). Standardowy kernel `mainline`/`lts` nie kompiluje niczego.
 
 **P: Mogę zainstalować na VM?**
 Tak, ale upewnij się że VM jest w trybie UEFI. W VirtualBox: Settings → System → Enable EFI. W QEMU: dodaj `-bios /usr/share/ovmf/OVMF.fd`.
 
 **P: Co jeśli mam Secure Boot?**
-Wyłącz Secure Boot w BIOS. NVIDIA proprietary drivers nie są podpisane.
+Installer obsługuje Secure Boot! Na ekranie 10 wybierz "Yes" — installer wygeneruje klucze MOK, podpisze kernel i GRUB, pobierze shim z Fedory. Przy pierwszym restarcie MokManager poprosi o enrollment klucza (hasło: `void`). Przyszłe aktualizacje kernela są podpisywane automatycznie. Jeśli używasz NVIDIA proprietary drivers, wyłącz Secure Boot — moduły NVIDIA nie są podpisane.
+
+**P: Mogę zainstalować na Microsoft Surface?**
+Tak. Installer wykrywa Surface przez DMI i oferuje dodatkowe opcje: kernel surface-patched (kompilacja ze źródeł z patchami linux-surface, ~30-60 min) i iptsd (touchscreen daemon). **Surface Laptop Go** nie wymaga ani surface-patched ani iptsd — standardowy kernel mainline obsługuje cały hardware (touchscreen HID, WiFi, GPU, fingerprint). Secure Boot działa przez MOK/shim.
 
 **P: Mogę użyć innego live ISO niż Void?**
 Tak, dowolne live ISO z Linuxem zadziała, pod warunkiem że ma `bash`, `git`, `sfdisk`, `wget`, `tar`, `sha256sum`, `chroot`. Installer ma zaszyty `gum` jako backend TUI, więc `dialog`/`whiptail` nie jest wymagany.
