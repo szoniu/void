@@ -217,9 +217,13 @@ install_surface_tools() {
     try "Cloning iptsd" \
         git clone --depth 1 https://github.com/linux-surface/iptsd.git "${iptsd_src}"
 
-    try "Configuring iptsd" \
-        meson setup "${iptsd_src}/build" "${iptsd_src}" \
-        -Dprefix=/usr -Dsystemd=false -Dservice_manager=none
+    # meson options vary by iptsd version — try with service_manager=none, fallback to plain
+    if ! meson setup "${iptsd_src}/build" "${iptsd_src}" \
+        -Dprefix=/usr -Dservice_manager=none 2>/dev/null; then
+        rm -rf "${iptsd_src}/build"
+        try "Configuring iptsd" \
+            meson setup "${iptsd_src}/build" "${iptsd_src}" -Dprefix=/usr
+    fi
 
     try "Building iptsd" \
         ninja -C "${iptsd_src}/build"
