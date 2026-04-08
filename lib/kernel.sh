@@ -132,15 +132,26 @@ _kernel_install_surface_patched() {
     base_config=$(ls /boot/config-* 2>/dev/null | sort -V | tail -1) || true
     if [[ -n "${base_config}" && -f "${base_config}" ]]; then
         cp "${base_config}" "${src_dir}/.config"
-        # Update config for new options (accept defaults)
-        make -C "${src_dir}" olddefconfig >> "${LOG_FILE}" 2>&1
     else
         ewarn "No base kernel config found — using defconfig"
         make -C "${src_dir}" defconfig >> "${LOG_FILE}" 2>&1
     fi
 
+    # Apply official linux-surface config fragment (SERIAL_DEV, SAM, cameras, IPTS, etc.)
+    local surface_config="${surface_dir}/configs/surface-${major}.${minor}.config"
+    if [[ ! -f "${surface_config}" ]]; then
+        surface_config=$(ls "${surface_dir}"/configs/surface-*.config 2>/dev/null | sort -V | tail -1) || true
+    fi
+    if [[ -n "${surface_config}" && -f "${surface_config}" ]]; then
+        einfo "Applying surface config fragment: $(basename "${surface_config}")"
+        cat "${surface_config}" >> "${src_dir}/.config"
+    fi
+
     # Set kernel extraversion to -surface
     sed -i 's/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-surface"/' "${src_dir}/.config"
+
+    # Finalize config (resolve new options with defaults)
+    make -C "${src_dir}" olddefconfig >> "${LOG_FILE}" 2>&1
 
     # Build kernel
     local nprocs
