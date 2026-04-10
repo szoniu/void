@@ -5,6 +5,13 @@ source "${LIB_DIR}/protection.sh"
 # system_set_timezone — Configure timezone
 system_set_timezone() {
     local tz="${TIMEZONE:-UTC}"
+
+    # Validate timezone
+    if [[ ! -f "/usr/share/zoneinfo/${tz}" ]]; then
+        ewarn "Invalid timezone '${tz}', falling back to UTC"
+        tz="UTC"
+    fi
+
     einfo "Setting timezone: ${tz}"
 
     # Void uses /etc/localtime symlink
@@ -39,8 +46,10 @@ system_set_locale() {
     # Set system locale
     echo "LANG=${locale}" > /etc/locale.conf
 
-    # Reconfigure glibc-locales to generate locales
-    try "Generating locales" xbps-reconfigure -f glibc-locales
+    # Reconfigure glibc-locales to generate locales (skip on musl)
+    if xbps-query glibc-locales &>/dev/null; then
+        try "Generating locales" xbps-reconfigure -f glibc-locales
+    fi
 
     einfo "Locale set to ${locale}"
 }

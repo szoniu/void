@@ -257,7 +257,7 @@ disk_plan_shrink() {
             ;;
         btrfs)
             disk_plan_add "Shrink btrfs filesystem on ${part}" \
-                bash -c "mkdir -p /mnt/void-shrink-tmp && mount ${part} /mnt/void-shrink-tmp && btrfs filesystem resize ${new_size}M /mnt/void-shrink-tmp && umount /mnt/void-shrink-tmp"
+                bash -c "tmp=\$(mktemp -d /tmp/void-shrink-XXXXXX) && mount ${part} \${tmp} && { btrfs filesystem resize ${new_size}M \${tmp}; rc=\$?; umount \${tmp}; rmdir \${tmp}; exit \${rc}; }"
             ;;
     esac
 

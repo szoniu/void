@@ -153,8 +153,8 @@ rootfs_extract() {
     einfo "Extracting ROOTFS to ${MOUNTPOINT}..."
     try "Extracting Void ROOTFS" tar xpf "${ROOTFS_FILE}" -C "${MOUNTPOINT}"
 
-    # Clean up tarball to save space
-    rm -f "${ROOTFS_FILE}"
-
     einfo "ROOTFS extracted successfully"
+
+    # Clean up tarball to save space (after checkpoint to allow resume)
+    rm -f "${ROOTFS_FILE}"
 }

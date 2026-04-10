@@ -136,6 +136,7 @@ check_dependencies() {
         tar
         sha256sum
         chroot
+        bc
     )
 
     for dep in "${required_deps[@]}"; do
@@ -941,5 +942,6 @@ get_cpu_count() {
 generate_password_hash() {
     local password="$1"
     openssl passwd -6 -stdin <<< "${password}" 2>/dev/null || \
-    VOID_PW="${password}" python3 -c "import hashlib, os, base64; pw=os.environ['VOID_PW'].encode(); salt=os.urandom(16); h=hashlib.sha512(salt+pw).digest(); print('\$6\$'+base64.b64encode(salt).decode()[:16]+'\$'+base64.b64encode(h).decode()[:86])" 2>/dev/null
+    mkpasswd -m sha-512 --stdin <<< "${password}" 2>/dev/null || \
+    { eerror "Cannot generate password hash: neither openssl nor mkpasswd available"; return 1; }
 }

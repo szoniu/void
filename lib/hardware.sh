@@ -443,8 +443,7 @@ _detect_linux_on_partition() {
     if [[ -n "${existing_mount}" ]]; then
         tmp_mount="${existing_mount}"
     else
-        tmp_mount="/tmp/os-detect-$$"
-        mkdir -p "${tmp_mount}"
+        tmp_mount=$(mktemp -d /tmp/os-detect-XXXXXX)
 
         local mount_opts="-o ro"
         [[ -n "${subvol}" ]] && mount_opts="-o ro,subvol=${subvol}"
@@ -482,8 +481,7 @@ _detect_ntfs_on_partition() {
     if [[ -n "${existing_mount}" ]]; then
         tmp_mount="${existing_mount}"
     else
-        tmp_mount="/tmp/os-detect-$$"
-        mkdir -p "${tmp_mount}"
+        tmp_mount=$(mktemp -d /tmp/os-detect-XXXXXX)
 
         if ! mount -o ro "${part}" "${tmp_mount}" 2>/dev/null; then
             rmdir "${tmp_mount}" 2>/dev/null || true

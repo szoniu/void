@@ -37,10 +37,10 @@ xbps_update() {
     einfo "Updating XBPS package manager..."
 
     # First update xbps itself
-    try "Updating xbps" xbps-install -Syu xbps
+    try "Updating xbps" xbps-install -Syu -y xbps
 
     # Full system update
-    try "System update" xbps-install -Syu
+    try "System update" xbps-install -Syu -y
 
     # Install base-system (replaces base-voidstrap from ROOTFS)
     try "Installing base-system" xbps-install -y base-system

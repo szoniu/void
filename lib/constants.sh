@@ -98,7 +98,7 @@ readonly -a CONFIG_VARS=(
     ESP_REUSE
     ROOT_PARTITION
     SWAP_PARTITION
-    BOOT_PARTITION
+    BOOT_PARTITION  # reserved for future separate /boot support
     HYBRID_GPU
     IGPU_VENDOR
     IGPU_DEVICE_NAME
