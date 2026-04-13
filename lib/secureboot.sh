@@ -73,16 +73,19 @@ secureboot_setup() {
         fi
     fi
 
-    # 3. Sign existing kernels
+    # 3. Rebuild GRUB with SBAT section (shim 15.8+ requires it)
+    _rebuild_grub_with_sbat "${key_dir}"
+
+    # 4. Sign existing kernels
     _sign_kernels "${key_dir}"
 
-    # 4. Setup shim on ESP
+    # 5. Setup shim on ESP
     _setup_shim "${key_dir}"
 
-    # 5. Queue MOK enrollment
+    # 6. Queue MOK enrollment
     _enroll_mok "${key_dir}"
 
-    # 6. Create kernel signing hook for future kernel updates
+    # 7. Create kernel signing hook for future kernel updates
     _create_kernel_signing_hook "${key_dir}"
 
     einfo "Secure Boot setup complete"
@@ -93,6 +96,46 @@ secureboot_setup() {
         einfo "After installation: enable Secure Boot in BIOS/UEFI -> reboot"
         einfo "MokManager will appear -> Enroll MOK -> password: ${_MOK_PASSWORD}"
     fi
+}
+
+# _rebuild_grub_with_sbat — Rebuild GRUB as standalone EFI with SBAT section
+# Shim 15.8+ rejects any EFI binary without .sbat section, even if properly signed.
+# Standard grub-install creates a core image WITHOUT .sbat — we must rebuild with grub-mkstandalone.
+_rebuild_grub_with_sbat() {
+    local key_dir="$1"
+    local priv="${key_dir}/MOK.priv"
+    local cert="${key_dir}/MOK.pem"
+    local efi_dir="/boot/efi/EFI/Void"
+    local sbat_csv="/usr/share/grub/sbat.csv"
+
+    # Create SBAT metadata if missing
+    if [[ ! -f "${sbat_csv}" ]]; then
+        mkdir -p /usr/share/grub
+        cat > "${sbat_csv}" << 'SBATEOF'
+sbat,1,SBAT Version,sbat,1,https://github.com/rhboot/shim/blob/main/SBAT.md
+grub,4,Free Software Foundation,grub,2.12,https://www.gnu.org/software/grub/
+SBATEOF
+    fi
+
+    einfo "Rebuilding GRUB with SBAT section..."
+    local grub_tmp="/tmp/grubx64-sbat.efi"
+
+    try "Building standalone GRUB with SBAT" \
+        grub-mkstandalone --format=x86_64-efi --output="${grub_tmp}" \
+        --sbat="${sbat_csv}" \
+        --modules="part_gpt part_msdos fat ext2 btrfs xfs normal boot linux search search_fs_uuid search_fs_file configfile echo test" \
+        "boot/grub/grub.cfg=/boot/grub/grub.cfg"
+
+    # Sign with MOK key
+    try "Signing GRUB with SBAT" \
+        sbsign --key "${priv}" --cert "${cert}" --output "${grub_tmp}" "${grub_tmp}"
+
+    # Replace on ESP
+    mkdir -p "${efi_dir}"
+    cp "${grub_tmp}" "${efi_dir}/grubx64.efi"
+    rm -f "${grub_tmp}"
+
+    einfo "GRUB rebuilt with SBAT and signed"
 }
 
 # _sign_kernels — Sign all existing kernel images
