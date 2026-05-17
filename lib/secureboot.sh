@@ -6,6 +6,15 @@ source "${LIB_DIR}/protection.sh"
 readonly _SHIM_FEDORA_VERSION="15.8"
 readonly _SHIM_FEDORA_RELEASE="3"
 readonly _SHIM_FEDORA_URL="https://kojipkgs.fedoraproject.org/packages/shim/${_SHIM_FEDORA_VERSION}/${_SHIM_FEDORA_RELEASE}/x86_64/shim-x64-${_SHIM_FEDORA_VERSION}-${_SHIM_FEDORA_RELEASE}.x86_64.rpm"
+# Optional pinned SHA256 of the RPM above. This binary enters the Secure Boot
+# chain, so when set it is enforced strictly. Empty by default: the correct
+# digest is version-specific and must come from a trusted source (Fedora koji
+# buildinfo for shim-x64-${_SHIM_FEDORA_VERSION}-${_SHIM_FEDORA_RELEASE}) —
+# pinning a wrong digest would break every Secure Boot install. When empty the
+# download still gets structural checks (HTTPS-only URL + RPM/PE magic bytes +
+# size sanity), so a MITM error page or truncated/substituted file is rejected.
+# To pin: export _SHIM_FEDORA_SHA256=<64-hex digest for this exact version>.
+readonly _SHIM_FEDORA_SHA256="${_SHIM_FEDORA_SHA256:-}"
 
 # MOK enrollment password used by MokManager at first boot
 readonly _MOK_PASSWORD="void"
@@ -171,9 +180,48 @@ _setup_shim() {
     local shim_tmp
     shim_tmp=$(mktemp -d /tmp/shim-download.XXXXXX)
 
+    # HTTPS-only: this file enters the Secure Boot chain; never fetch it over
+    # plain http even if the constant is edited.
+    if [[ "${_SHIM_FEDORA_URL}" != https://* ]]; then
+        ewarn "Shim URL is not https:// — refusing to download (Secure Boot disabled)"
+        rm -rf "${shim_tmp}"
+        return 0
+    fi
+
     einfo "Downloading shim from Fedora..."
     try "Downloading shim RPM" \
         curl -fsSL -o "${shim_tmp}/shim.rpm" "${_SHIM_FEDORA_URL}"
+
+    # Integrity checks before trusting the RPM:
+    # 1. Pinned SHA256 (strict, if an operator/CI set one for this version).
+    # 2. RPM magic bytes (ed ab ee db) — rejects MITM HTML error pages,
+    #    captive-portal responses and truncated/substituted downloads.
+    # 3. Sane minimum size — a real shim RPM is hundreds of KiB.
+    local rpm_file="${shim_tmp}/shim.rpm"
+    if [[ -n "${_SHIM_FEDORA_SHA256}" ]]; then
+        local got
+        got=$(sha256sum "${rpm_file}" | cut -d' ' -f1) || true
+        if [[ "${got}" != "${_SHIM_FEDORA_SHA256}" ]]; then
+            eerror "Shim RPM SHA256 mismatch (expected ${_SHIM_FEDORA_SHA256}, got ${got})"
+            rm -rf "${shim_tmp}"
+            die "Shim integrity check failed — aborting Secure Boot setup"
+        fi
+        einfo "Shim RPM SHA256 pin verified"
+    fi
+    local magic
+    magic=$(head -c4 "${rpm_file}" | od -An -tx1 2>/dev/null | tr -d ' \n') || true
+    local rpm_size
+    rpm_size=$(stat -c%s "${rpm_file}" 2>/dev/null || stat -f%z "${rpm_file}" 2>/dev/null || echo 0)
+    if [[ "${magic}" != "edabeedb" ]]; then
+        ewarn "Downloaded shim is not a valid RPM (magic='${magic}') — Secure Boot disabled"
+        rm -rf "${shim_tmp}"
+        return 0
+    fi
+    if [[ "${rpm_size}" -lt 51200 ]]; then
+        ewarn "Downloaded shim RPM implausibly small (${rpm_size} bytes) — Secure Boot disabled"
+        rm -rf "${shim_tmp}"
+        return 0
+    fi
 
     # Extract EFI binaries from RPM using bsdtar (libarchive, available in base Void)
     einfo "Extracting shim binaries..."
@@ -187,6 +235,16 @@ _setup_shim() {
 
     if [[ -z "${shim_src}" ]]; then
         ewarn "shimx64.efi not found in RPM — Secure Boot chainloading may not work"
+        rm -rf "${shim_tmp}"
+        return 0
+    fi
+
+    # The extracted shim must be a real PE/COFF EFI binary ('MZ' magic). A
+    # tampered RPM could otherwise drop a junk file into the boot chain.
+    local shim_magic
+    shim_magic=$(head -c2 "${shim_src}" 2>/dev/null) || true
+    if [[ "${shim_magic}" != "MZ" ]]; then
+        ewarn "Extracted shimx64.efi is not a PE/EFI binary — Secure Boot disabled"
         rm -rf "${shim_tmp}"
         return 0
     fi

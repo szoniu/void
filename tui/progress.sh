@@ -87,9 +87,21 @@ screen_progress() {
     local total=${#INSTALL_PHASES[@]}
     local i=0
 
-    # Mount filesystems early so checkpoint validation can check target disk contents
+    # Mount filesystems early so checkpoint validation can inspect target disk
+    # contents. Best-effort, but NOT silenced: a failure here (e.g. a stale or
+    # wrong ROOT_PARTITION from an inferred --resume config) must be visible in
+    # the log. We only attempt when ROOT_PARTITION is a real block device;
+    # checkpoint_validate "disks" then invalidates the disks checkpoint when
+    # the mount did not succeed, so the disks phase safely re-runs instead of
+    # the installer proceeding onto an unmounted/wrong target.
     if checkpoint_reached "disks" && ! mountpoint -q "${MOUNTPOINT}" 2>/dev/null; then
-        mount_filesystems 2>/dev/null || true
+        if [[ -b "${ROOT_PARTITION:-}" ]]; then
+            if ! mount_filesystems; then
+                ewarn "Early mount of ${ROOT_PARTITION} failed — disks checkpoint will be re-validated"
+            fi
+        else
+            ewarn "ROOT_PARTITION '${ROOT_PARTITION:-unset}' is not a block device — skipping early mount"
+        fi
     fi
 
     # Check for previous progress and handle resume
@@ -181,6 +193,23 @@ _run_chroot_with_live_output() {
     echo ""
 
     einfo "=== Phase: Chroot installation ==="
+
+    # On --resume the xbps_preconfig phase (which mounts the ESP and copies the
+    # installer into the target) may already be checkpointed and thus skipped.
+    # Re-entering chroot with a stale installer copy or an unmounted ESP would
+    # run old code / fail the bootloader install. Make both idempotent here so
+    # the chroot phase is always entered with a fresh copy and a mounted ESP —
+    # mirrors Gentoo's _execute_chroot_phase.
+    if [[ -n "${ESP_PARTITION:-}" && "${DRY_RUN:-0}" != "1" ]]; then
+        local esp_mount="${MOUNTPOINT}/boot/efi"
+        mkdir -p "${esp_mount}"
+        if ! mountpoint -q "${esp_mount}" 2>/dev/null; then
+            ewarn "ESP not mounted — re-mounting ${ESP_PARTITION} at ${esp_mount}"
+            try "Re-mounting ESP" mount "${ESP_PARTITION}" "${esp_mount}"
+        fi
+    fi
+    copy_installer_to_chroot
+    copy_dns_info
 
     export LIVE_OUTPUT=1
 

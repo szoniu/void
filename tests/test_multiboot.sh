@@ -172,13 +172,16 @@ FILESYSTEM="ext4"
 ESP_PARTITION="/dev/sda1"
 unset ROOT_PARTITION
 
-# We can't actually run sfdisk --dump in test, but we test the prefix logic
-part_prefix="/dev/sda"
-[[ "/dev/sda" =~ [0-9]$ ]] && part_prefix="/dev/sdap"
+# We can't actually run sfdisk --dump in test, but we test the prefix logic.
+# Disk path comes from a variable so the regex is exercised, not a constant.
+disk_dev="/dev/sda"
+part_prefix="${disk_dev}"
+[[ "${disk_dev}" =~ [0-9]$ ]] && part_prefix="${disk_dev}p"
 assert_eq "sda prefix (no trailing digit)" "/dev/sda" "${part_prefix}"
 
-part_prefix="/dev/nvme0n1"
-[[ "/dev/nvme0n1" =~ [0-9]$ ]] && part_prefix="/dev/nvme0n1p"
+disk_dev="/dev/nvme0n1"
+part_prefix="${disk_dev}"
+[[ "${disk_dev}" =~ [0-9]$ ]] && part_prefix="${disk_dev}p"
 assert_eq "nvme prefix (trailing digit)" "/dev/nvme0n1p" "${part_prefix}"
 
 # =============================================================================

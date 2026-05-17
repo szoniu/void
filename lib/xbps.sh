@@ -4,7 +4,7 @@ source "${LIB_DIR}/protection.sh"
 
 # xbps_configure_mirror — Set up XBPS mirror in target
 xbps_configure_mirror() {
-    local mirror="${MIRROR_URL:-${VOID_REPO_BASE}}"
+    local mirror; mirror=$(void_mirror)
 
     einfo "Configuring XBPS mirror: ${mirror}"
 
@@ -22,7 +22,7 @@ xbps_configure_nonfree() {
         return 0
     fi
 
-    local mirror="${MIRROR_URL:-${VOID_REPO_BASE}}"
+    local mirror; mirror=$(void_mirror)
 
     einfo "Enabling nonfree repository"
 

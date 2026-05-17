@@ -242,10 +242,29 @@ disk_plan_shrink() {
         return 1
     fi
 
+    # Hard safety gate, independent of the TUI shrink wizard: never shrink a
+    # partition below the space it is actually using (+1 GiB margin). The
+    # wizard normally enforces this, but disk_plan_shrink can also be reached
+    # from a hand-edited preset or an inferred --resume config where the value
+    # is untrusted — shrinking below used data destroys the filesystem.
+    local used_mib margin=1024
+    used_mib=$(disk_get_partition_used_mib "${part}" "${fstype}")
+    if [[ "${used_mib}" =~ ^[0-9]+$ && "${used_mib}" -gt 0 ]] && \
+       [[ "${new_size}" -lt $(( used_mib + margin )) ]]; then
+        eerror "Refusing to shrink ${part}: requested ${new_size} MiB is below"
+        eerror "used space ${used_mib} MiB + ${margin} MiB safety margin"
+        return 1
+    fi
+
     einfo "Planning shrink: ${part} (${fstype}) -> ${new_size} MiB"
 
     case "${fstype}" in
         ntfs)
+            # Dry-run first: ntfsresize --no-action validates the target size
+            # against the actual NTFS layout and fails harmlessly if it would
+            # truncate data, before the destructive resize runs.
+            disk_plan_add "Validate NTFS shrink on ${part} (dry-run)" \
+                ntfsresize --no-action --force --size "${new_size}M" "${part}"
             disk_plan_add "Shrink NTFS filesystem on ${part}" \
                 ntfsresize --force --size "${new_size}M" "${part}"
             ;;
@@ -297,13 +316,32 @@ disk_plan_dualboot() {
             "type=${GPT_TYPE_LINUX}, name=linux"$'\n' \
             sfdisk --append --force --no-reread "${disk}"
 
-        # Determine partition name: count existing partitions via sfdisk
-        local existing_count
-        existing_count=$(sfdisk --dump "${disk}" 2>/dev/null | grep -c "^${disk}") || existing_count=0
-        local next_part_num=$(( existing_count + 1 ))
+        # Determine the new partition's number. Use the HIGHEST existing
+        # partition number + 1 (not a count — partition numbers can be
+        # non-contiguous, e.g. p1+p3). lsblk is robust under `set -o pipefail`
+        # (awk always prints an integer); the previous `sfdisk|grep -c`
+        # collapsed to 0 on the pipefail/no-match path, which made
+        # ROOT_PARTITION resolve to partition 1 — typically the ESP — and a
+        # subsequent mkfs would have destroyed the existing boot partition.
+        local disk_base max_num next_part_num
+        disk_base="$(basename "${disk}")"
+        # `|| max_num=0`: lsblk|awk under `set -o pipefail` (or a missing lsblk)
+        # must not abort the installer here — fall back to 0 so the rescan in
+        # disk_execute_plan corrects the number afterwards.
+        max_num=$(lsblk -rno NAME,TYPE "${disk}" 2>/dev/null \
+            | awk -v d="${disk_base}" '
+                $2=="part" {
+                    n=$1; sub("^" d "p?", "", n);
+                    if (n ~ /^[0-9]+$/ && n+0 > m) m=n+0
+                }
+                END { print m+0 }') || max_num=0
+        [[ "${max_num}" =~ ^[0-9]+$ ]] || max_num=0
+        next_part_num=$(( max_num + 1 ))
         local part_prefix="${disk}"
         [[ "${disk}" =~ [0-9]$ ]] && part_prefix="${disk}p"
         ROOT_PARTITION="${part_prefix}${next_part_num}"
+        # disk_execute_plan re-scans and corrects ROOT_PARTITION afterwards if
+        # sfdisk --append assigned a different number than predicted here.
     fi
 
     # Format root
@@ -429,6 +467,21 @@ disk_execute_plan() {
                     ewarn "Could not detect root partition — manual verification may be needed"
                 fi
             fi
+        fi
+    fi
+
+    # After auto partitioning, any OS found by the pre-install hardware scan is
+    # gone — every partition was wiped and reformatted. Clear DETECTED_OSES so
+    # _verify_grub_config does not emit false-positive "missing OS" warnings
+    # about systems the user deliberately erased.
+    if [[ "${PARTITION_SCHEME:-auto}" == "auto" && "${DRY_RUN:-0}" != "1" ]]; then
+        if [[ -n "${DETECTED_OSES_SERIALIZED:-}" || "${WINDOWS_DETECTED:-0}" != "0" || "${LINUX_DETECTED:-0}" != "0" ]]; then
+            einfo "Clearing pre-wipe OS detection (auto scheme erases all)"
+            declare -gA DETECTED_OSES=()
+            WINDOWS_DETECTED=0
+            LINUX_DETECTED=0
+            DETECTED_OSES_SERIALIZED=""
+            export WINDOWS_DETECTED LINUX_DETECTED DETECTED_OSES_SERIALIZED
         fi
     fi
 

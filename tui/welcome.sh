@@ -26,6 +26,28 @@ Press OK to check prerequisites and continue."
 
     dialog_msgbox "Welcome" "${welcome_text}" || return "${TUI_ABORT}"
 
+    # Architecture gate — checked FIRST, before any other prerequisite and
+    # before anything touches the disk. This installer is x86_64 only; on
+    # aarch64/ARM (Microsoft Surface Laptop 7 / Snapdragon X, ARM laptops &
+    # SBCs) it would download an x86_64 ROOTFS, partition/wipe the disk, then
+    # fail on the first chroot exec — bricking the machine. NOT bypassable
+    # with --force: there is no way for an x86_64 install to succeed on a
+    # non-x86_64 CPU.
+    if ! is_supported_arch; then
+        dialog_msgbox "Unsupported architecture" \
+"Detected CPU architecture: $(uname -m 2>/dev/null || echo unknown)
+
+This installer supports ONLY x86_64 / amd64.
+
+ARM/aarch64 machines — including the Microsoft Surface Laptop 7 and
+other Qualcomm Snapdragon X laptops, ARM laptops and SBCs — are NOT
+supported: the Void ROOTFS, XBPS packages, GRUB target and bundled
+tools are all x86_64. Proceeding would wipe the disk and then fail.
+
+Installation aborted. No changes were made to any disk."
+        return "${TUI_ABORT}"
+    fi
+
     # Check prerequisites
     local -a errors=()
     local -a warnings=()

@@ -25,7 +25,7 @@ _find_rootfs_file() {
 # rootfs_get_url — Get the latest ROOTFS download URL
 # Void publishes ROOTFS at a fixed URL pattern, we need to find the actual filename
 rootfs_get_url() {
-    local mirror="${MIRROR_URL:-${VOID_REPO_BASE}}"
+    local mirror; mirror=$(void_mirror)
     local base_url="${mirror}/live/current"
 
     einfo "Fetching ROOTFS file list from ${base_url}..."
@@ -96,7 +96,7 @@ rootfs_verify() {
         _find_rootfs_file || die "No ROOTFS file found to verify"
     fi
 
-    local mirror="${MIRROR_URL:-${VOID_REPO_BASE}}"
+    local mirror; mirror=$(void_mirror)
     local sha256_url="${mirror}/live/current/sha256sum.txt"
     local sha256_file
     sha256_file=$(mktemp "${TMPDIR:-/tmp}/void-sha256-verify.XXXXXX")

@@ -2,6 +2,18 @@
 
 Interaktywny installer Void Linux z interfejsem TUI (gum/dialog). Przeprowadza za rękę przez cały proces instalacji — od partycjonowania dysku po działający desktop KDE Plasma. Po awarii: `./install.sh --resume` skanuje dyski i wznawia od ostatniego checkpointu.
 
+## Status (audyt 2026-05-17, po naprawach)
+
+Rdzeń jest dojrzały i na parytecie z działającym instalatorem Gentoo. Wszystkie luki wykryte w audycie zostały naprawione. Pełny zestaw: 9 plików testowych (255 asercji) + `shellcheck` (52 pliki czyste) — wszystko zielone.
+
+- ✅ **Instalacja na czystym dysku** (`scheme=auto`, x86_64) — bezpieczna.
+- ✅ **Dual-boot / shrink** — dodano twardą bramkę bezpieczeństwa (odmowa zmniejszenia poniżej zajętego miejsca + margines 1 GiB, dry-run NTFS) oraz odporne liczenie numeru partycji. Standardowe zalecenie kopii zapasowej przed dual-bootem nadal obowiązuje.
+- ✅ **Guard architektury** — na nie-x86_64 instalator przerywa od razu, **przed** dotknięciem dysku.
+- ✅ **Bezpieczeństwo pobierania** — wymuszony HTTPS dla mirrora, kontrole integralności shima.
+- ✅ **`--resume`** — nie maskuje błędów montowania; chroot zawsze z aktualną kopią instalatora i podmontowanym ESP; checkpoint kernela respektuje zmianę typu jądra.
+
+Szczegóły napraw w `CLAUDE.md` → „Readiness status".
+
 ## Krok po kroku (od zera do działającego systemu)
 
 ### 1. Przygotuj bootowalny pendrive
@@ -113,6 +125,7 @@ sudo xbps-install -Su
 
 ## Wymagania
 
+- Architektura **x86_64** (instalator i bundlowany gum/ROOTFS są wyłącznie x86_64; na innych architekturach instalator bezpiecznie przerywa przed dotknięciem dysku)
 - Komputer z **UEFI** (nie Legacy BIOS)
 - **Secure Boot** — obsługiwany (MOK/shim) lub wyłączony
 - Minimum **10 GiB** wolnego miejsca na dysku docelowym

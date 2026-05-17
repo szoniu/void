@@ -31,8 +31,12 @@ system_set_locale() {
     # Enable locale in libc-locales
     local locales_file="/etc/default/libc-locales"
     if [[ -f "${locales_file}" ]]; then
-        # Uncomment the desired locale
-        sed -i "s/^#\(${locale}\)/\1/" "${locales_file}"
+        # Uncomment the desired locale. Escape regex metacharacters in the
+        # locale (notably the '.' in 'en_US.UTF-8', which would otherwise match
+        # any char and could uncomment the wrong line).
+        local locale_re="${locale//\\/\\\\}"
+        locale_re="${locale_re//./\\.}"
+        sed -i "s/^#[[:space:]]*\(${locale_re}\)/\1/" "${locales_file}"
         # Also enable en_US.UTF-8 as fallback if not already the primary
         if [[ "${locale}" != "en_US.UTF-8" ]]; then
             sed -i 's/^#\(en_US\.UTF-8\)/\1/' "${locales_file}"

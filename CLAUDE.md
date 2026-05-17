@@ -52,6 +52,7 @@ tui/                    — TUI screens
 ├── kernel_select.sh    — screen_kernel_select: mainline/lts (+ surface-patched when Surface detected)
 ├── secureboot_config.sh — screen_secureboot_config: Secure Boot MOK signing yes/no (EFI only)
 ├── gpu_config.sh       — screen_gpu_config: auto/nvidia/amd/intel/none + nvidia-open + hybrid GPU display
+├── desktop_select.sh   — screen_desktop_select: desktop environment (sets DESKTOP_TYPE)
 ├── desktop_config.sh   — screen_desktop_config: KDE apps checklist
 ├── user_config.sh      — screen_user_config: root pwd, user, groups
 ├── extra_packages.sh   — screen_extra_packages: checklist (fastfetch, btop, kitty + conditional hw items) + freeform text
@@ -98,7 +99,10 @@ All config variables are defined in `CONFIG_VARS[]` in `lib/constants.sh`:
 | `LOCALE` | locale string | e.g. `en_US.UTF-8` |
 | `KEYMAP` | keymap name | e.g. `us`, `pl` |
 | `KERNEL_TYPE` | mainline/lts/surface-patched | Kernel flavor (surface-patched compiles from source with linux-surface patches) |
+| `DESKTOP_TYPE` | kde/... | Desktop environment (set in `tui/desktop_select.sh`) |
 | `GPU_VENDOR` | nvidia/amd/intel/none/unknown | Detected or selected GPU |
+| `GPU_DEVICE_ID` | PCI id | Detected GPU PCI device id |
+| `GPU_DEVICE_NAME` | string | Detected GPU model name |
 | `GPU_DRIVER` | nvidia/mesa-dri | Driver package recommendation |
 | `GPU_USE_NVIDIA_OPEN` | yes/no | Use open kernel module (Turing+) |
 | `DESKTOP_EXTRAS` | space-separated | KDE apps: firefox, thunderbird, etc. |
@@ -408,9 +412,12 @@ bash tests/test_checkpoint.sh    # Checkpoint validate + migrate
 bash tests/test_resume.sh        # Resume from disk scanning + recovery
 bash tests/test_multiboot.sh     # Multi-boot OS detection + serialization
 bash tests/test_infer_config.sh  # Config inference from installed system
+bash tests/test_validate.sh      # validate_config() — pre-install safety gate
+bash tests/test_shrink.sh        # Shrink planning + safety gate (destructive path)
+bash tests/shellcheck.sh         # Static analysis / lint (needs shellcheck)
 ```
 
-All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`.
+All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 9 functional files (255 assertions) + `shellcheck.sh` (lints all 52 `.sh` files; needs `shellcheck` installed).
 
 ## Known patterns and pitfalls
 
@@ -460,6 +467,23 @@ All tests are standalone — they do not require root or hardware. They use `DRY
 - **linux-surface patches may not apply cleanly**: Patches are version-matched to `patches/X.Y/` directory. If no exact match, uses highest available version. Each patch is dry-run first; failures are skipped gracefully with warnings.
 - **Kernel signing hook for XBPS updates**: `/etc/kernel.d/post-install/20-secureboot-sign` auto-signs kernels on XBPS kernel updates. Requires `/root/secureboot/MOK.priv` to exist.
 - **Surface detection via DMI**: `detect_surface()` reads `sys_vendor` (not `board_vendor` like ASUS ROG). Matches `"Microsoft Corporation"` + `product_name == Surface*`.
+
+## Readiness status (audit 2026-05-17, remediated 2026-05-17)
+
+Core is mature and at near-parity with the working Gentoo reference installer (`../gentoo`): two-process model, checkpoints, resume, `try()` recovery, two-phase sfdisk, dual-boot/os-prober, Secure Boot MOK/shim are faithfully ported. `_verify_grub_config` is byte-identical to Gentoo; `disk.sh` adds LUKS close + `blockdev --rereadpt` fallback beyond the reference. The full suite is 9 functional test files (255 assertions) + `shellcheck.sh` (52 files clean) — all green.
+
+All audit-identified gaps have been remediated:
+
+1. **Architecture guard** — `is_supported_arch()` in `lib/utils.sh`; gated FIRST in `tui/welcome.sh` (before anything touches the disk), `TUI_ABORT` on non-x86_64.
+2. **Dual-boot partition number** — `lib/disk.sh` now derives the new partition from the *highest existing partition number + 1* via `lsblk`+`awk` (robust under `set -o pipefail`, `|| max_num=0` fallback); `disk_execute_plan` rescan still corrects if `sfdisk --append` differs.
+3. **`tee`/`pipefail` exit code** — `try()` (`lib/utils.sh`) uses `if "$@" | tee …; then 0; else ${PIPESTATUS[0]}` so the command's real exit code is captured, not `tee`'s.
+4. **Download authenticity** — `void_mirror()` coerces http→https (every ROOTFS/XBPS consumer uses it); `validate_config` rejects non-http(s) `MIRROR_URL`; shim path is HTTPS-only with RPM/PE magic + size checks and an optional enforced `_SHIM_FEDORA_SHA256` pin (empty by default — see comment in `lib/secureboot.sh`).
+5. **Resume robustness** — `tui/progress.sh` no longer silences the early mount (guards on `-b ROOT_PARTITION`, warns visibly); the chroot phase always re-mounts ESP + refreshes the installer copy + DNS before `chroot_setup`.
+6. **Kernel checkpoint metadata** — `checkpoint_set "kernel" "${KERNEL_TYPE}"`; `checkpoint_validate "kernel"` re-runs the phase when the recorded type ≠ current `KERNEL_TYPE` (legacy metadata-less checkpoints still trusted).
+
+Medium fixes applied: locale `sed` now escapes regex metachars (`lib/system.sh`); `disk_execute_plan` clears `DETECTED_OSES`/`WINDOWS_DETECTED`/`LINUX_DETECTED` after `auto` scheme; clock-sync guards `ntpd` with `command -v` and warns loudly if the year is implausible. Extra hardening beyond the audit: `disk_plan_shrink` has a hard safety gate (refuses shrink below used space + 1 GiB margin) and an NTFS `--no-action` dry-run before the destructive resize.
+
+Tests added to reach Gentoo-level coverage: `test_validate.sh` (39), `test_shrink.sh` (39, incl. the safety gate), `shellcheck.sh` (lints all `.sh`).
 
 ## Debugging during live installation
 

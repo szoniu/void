@@ -19,8 +19,17 @@ try() {
 
         local exit_code=0
         if [[ "${LIVE_OUTPUT:-0}" == "1" ]]; then
-            # Show output on terminal AND log to file (pipeline, not process substitution)
-            "$@" 2>&1 | tee -a "${LOG_FILE}" || exit_code=$?
+            # Show output on terminal AND log to file. The whole chroot phase
+            # runs with LIVE_OUTPUT=1, so EVERY command goes through this pipe.
+            # Capture the COMMAND's exit code via PIPESTATUS[0] — `tee`'s exit
+            # (broken pipe / disk full) must not mask a real command
+            # success/failure. The `if` also stops `set -e` from aborting on a
+            # failed pipeline before we read PIPESTATUS.
+            if "$@" 2>&1 | tee -a "${LOG_FILE}"; then
+                exit_code=0
+            else
+                exit_code=${PIPESTATUS[0]}
+            fi
         else
             "$@" >> "${LOG_FILE}" 2>&1 || exit_code=$?
         fi
@@ -173,6 +182,39 @@ is_root() {
     [[ "$(id -u)" -eq 0 ]]
 }
 
+# void_mirror — Return the configured mirror, coerced to https://.
+# The ROOTFS is authenticated only by a sha256sum.txt fetched from the SAME
+# mirror, so a plain-http mirror (or an http:// preset) is a MITM hole: an
+# attacker rewriting http traffic can swap both the tarball and its checksum.
+# Coerce http->https here; non-http(s) schemes are hard-rejected earlier by
+# validate_config (die in a $() subshell would not abort the parent, so this
+# helper never dies — it degrades safely to the default https base).
+void_mirror() {
+    local m="${MIRROR_URL:-${VOID_REPO_BASE}}"
+    case "${m}" in
+        https://*) printf '%s' "${m}" ;;
+        http://*)
+            ewarn "Mirror uses http:// — upgrading to https:// (MITM protection)"
+            printf '%s' "https://${m#http://}" ;;
+        *)
+            ewarn "Mirror '${m}' is not http(s) — falling back to ${VOID_REPO_BASE}"
+            printf '%s' "${VOID_REPO_BASE}" ;;
+    esac
+}
+
+# is_supported_arch — This installer is hardwired for x86_64. The Void ROOTFS
+# URL, XBPS packages, grub-x86_64-efi target and bundled x86_64 gum binary are
+# all x86_64-only. On any other arch (e.g. aarch64 — Microsoft Surface Laptop 7
+# / Snapdragon X, ARM laptops/SBCs) it would download an x86_64 ROOTFS, WIPE
+# THE DISK, then die on the first chroot exec. Refuse before anything
+# destructive. NOT bypassable: an x86_64 install cannot succeed on non-x86_64.
+is_supported_arch() {
+    case "$(uname -m 2>/dev/null)" in
+        x86_64|amd64) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # ensure_dns — Add fallback nameserver if DNS resolution fails
 ensure_dns() {
     if ! ping -c 1 -W 3 voidlinux.org &>/dev/null && ! ping -c 1 -W 3 google.com &>/dev/null; then
@@ -193,10 +235,18 @@ has_network() {
 }
 
 # checkpoint_set — Mark a phase as completed
+# Optional 2nd arg is stored as the checkpoint file's content so a later
+# resume can tell *what* was done, not just *that* it was done (e.g. which
+# kernel type was built — see checkpoint_validate "kernel").
 checkpoint_set() {
     local name="$1"
+    local meta="${2:-}"
     mkdir -p "${CHECKPOINT_DIR}"
-    touch "${CHECKPOINT_DIR}/${name}"
+    if [[ -n "${meta}" ]]; then
+        printf '%s\n' "${meta}" > "${CHECKPOINT_DIR}/${name}"
+    else
+        touch "${CHECKPOINT_DIR}/${name}"
+    fi
     einfo "Checkpoint set: ${name}"
 }
 
@@ -230,7 +280,21 @@ checkpoint_validate() {
         chroot)
             [[ -f "${MOUNTPOINT}${CHECKPOINT_DIR_SUFFIX}/finalize" ]] ;;
         kernel)
-            ls "${MOUNTPOINT}/boot/vmlinuz-"* &>/dev/null 2>&1 || ls /boot/vmlinuz-* &>/dev/null 2>&1 ;;
+            # A vmlinuz must exist on the target...
+            if ! ls "${MOUNTPOINT}/boot/vmlinuz-"* &>/dev/null 2>&1 && \
+               ! ls /boot/vmlinuz-* &>/dev/null 2>&1; then
+                return 1
+            fi
+            # ...and it must be the kernel type the user wants *now*. The
+            # checkpoint file records the type it was built for; if the user
+            # switched (e.g. mainline -> lts -> surface-patched on a re-run or
+            # --resume) the recorded type won't match KERNEL_TYPE, so the
+            # phase must re-run instead of silently keeping the old kernel.
+            local recorded
+            recorded=$(cat "${CHECKPOINT_DIR}/kernel" 2>/dev/null) || true
+            recorded="${recorded//[[:space:]]/}"
+            [[ -z "${recorded}" ]] && return 0  # legacy checkpoint (no type) — trust it
+            [[ "${recorded}" == "${KERNEL_TYPE:-mainline}" ]] ;;
         *)
             return 0 ;;  # trust checkpoint for the rest
     esac

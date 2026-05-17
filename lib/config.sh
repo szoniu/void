@@ -108,6 +108,8 @@ config_set() {
     fi
 
     printf -v "${var}" '%s' "${value}"
+    # Intentional indirect export of the variable *named* by ${var}.
+    # shellcheck disable=SC2163
     export "${var}"
 }
 
@@ -197,6 +199,14 @@ validate_config() {
     if [[ -n "${LOCALE:-}" ]] && \
        [[ ! "${LOCALE}" =~ ^[a-z]{2}_[A-Z]{2}\.UTF-8$ ]]; then
         errors+=("LOCALE='${LOCALE}' — must match xx_XX.UTF-8 format")
+    fi
+
+    # Mirror must be https:// — the ROOTFS is authenticated only by a checksum
+    # file fetched from the same mirror, so plain http is a MITM hole. http://
+    # is auto-upgraded by void_mirror() at runtime; any other scheme is fatal.
+    if [[ -n "${MIRROR_URL:-}" ]] && \
+       [[ ! "${MIRROR_URL}" =~ ^https?:// ]]; then
+        errors+=("MIRROR_URL='${MIRROR_URL}' — must be an http(s):// URL (https strongly preferred)")
     fi
 
     # --- Block device checks (skip in DRY_RUN) ---

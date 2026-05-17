@@ -262,7 +262,7 @@ _do_chroot_phases() {
         maybe_exec 'before_kernel'
         kernel_install
         maybe_exec 'after_kernel'
-        checkpoint_set "kernel"
+        checkpoint_set "kernel" "${KERNEL_TYPE:-mainline}"
     else
         einfo "Skipping kernel (checkpoint reached)"
     fi
@@ -425,7 +425,10 @@ preflight_checks() {
         fi
     fi
 
-    # Sync clock (skip if NTP daemon already running)
+    # Sync clock (skip if NTP daemon already running). A wrong clock makes
+    # every HTTPS download fail (TLS cert validity window) — so after the
+    # best-effort sync we sanity-check the year and warn loudly if it is still
+    # implausible instead of letting curl fail cryptically later.
     if [[ "${DRY_RUN}" != "1" ]]; then
         if pgrep -x chronyd &>/dev/null || pgrep -x ntpd &>/dev/null; then
             einfo "NTP daemon already running, clock should be synced"
@@ -434,8 +437,18 @@ preflight_checks() {
             einfo "Clock synced via chrony"
         elif command -v ntpdate &>/dev/null; then
             try "Syncing system clock" ntpdate pool.ntp.org || true
-        elif ntpd --help 2>&1 | grep -q 'step'; then
+        elif command -v ntpd &>/dev/null; then
             try "Syncing system clock" ntpd -q -g || true
+        else
+            ewarn "No NTP client found — cannot sync clock automatically"
+        fi
+
+        local _year
+        _year=$(date -u +%Y 2>/dev/null || echo 0)
+        if [[ "${_year}" -lt 2024 ]]; then
+            ewarn "System clock looks wrong (year=${_year}). HTTPS downloads"
+            ewarn "(ROOTFS, mirrors, shim) may fail TLS validation. Set the"
+            ewarn "clock manually: date -u MMDDhhmmYYYY"
         fi
     fi
 
