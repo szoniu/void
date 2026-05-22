@@ -47,6 +47,7 @@ source "${LIB_DIR}/secureboot.sh"
 source "${LIB_DIR}/system.sh"
 source "${LIB_DIR}/desktop.sh"
 source "${LIB_DIR}/swap.sh"
+source "${LIB_DIR}/umpc.sh"
 source "${LIB_DIR}/chroot.sh"
 source "${LIB_DIR}/hooks.sh"
 source "${LIB_DIR}/preset.sh"
@@ -366,7 +367,21 @@ _do_chroot_phases() {
         einfo "Skipping extras (checkpoint reached)"
     fi
 
-    # Phase 15: Finalize
+    # Phase 15: UMPC quirks (panel rotation cmdline already set in bootloader;
+    # this phase installs runtime services like ALC287 unmute, SDDM greeter
+    # rotation, and the POST-INSTALL note for gpd-fan-daemon). Skipped silently
+    # when no UMPC is detected, so cost is zero for normal hardware.
+    if ! checkpoint_reached "umpc_quirks"; then
+        einfo "--- Phase: UMPC quirks ---"
+        maybe_exec 'before_umpc_quirks'
+        umpc_apply_quirks
+        maybe_exec 'after_umpc_quirks'
+        checkpoint_set "umpc_quirks"
+    else
+        einfo "Skipping UMPC quirks (checkpoint reached)"
+    fi
+
+    # Phase 16: Finalize
     if ! checkpoint_reached "finalize"; then
         einfo "--- Phase: Finalization ---"
         maybe_exec 'before_finalize'

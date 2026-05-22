@@ -64,6 +64,7 @@ readonly -a CHECKPOINTS=(
     "desktop"
     "users"
     "extras"
+    "umpc_quirks"
     "finalize"
 )
 
@@ -122,6 +123,14 @@ readonly -a CONFIG_VARS=(
     SURFACE_DETECTED
     SURFACE_MODEL
     ENABLE_IPTSD
+    UMPC_DETECTED
+    UMPC_VENDOR
+    UMPC_MODEL
+    UMPC_PANEL_ORIENTATION
+    UMPC_VIDEO_CONNECTOR
+    UMPC_FBCON_ROTATE
+    UMPC_ALC287_QUIRK
+    UMPC_GPD_FAN
     ENABLE_SECUREBOOT
     SHRINK_PARTITION
     SHRINK_PARTITION_FSTYPE
