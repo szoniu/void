@@ -37,6 +37,7 @@ lib/                    — Library modules (NEVER execute directly)
 ├── desktop.sh          — desktop_install (GPU drivers, KDE Plasma, SDDM, elogind, PipeWire, KDE apps), install_hyprland_ecosystem, install_noctalia_shell
 ├── swap.sh             — swap_setup (zramen, partition, swap file)
 ├── chroot.sh           — chroot_setup/teardown/exec, copy_dns_info, copy_installer_to_chroot
+├── snapper.sh          — snapper_setup (config root, cron timeline/cleanup, grub-btrfsd, wrapper xbps-snapshot)
 ├── luks.sh             — luks_configure_system (crypttab, dracut+keyfile, cryptsetup), luks_grub_cmdline
 ├── apple.sh            — detect_apple (DMI), detect_macos_partitions (APFS/HFS+ po GPT GUID), apple_write_early_quirks (applespi→initramfs, hid fnmode), apple_apply_quirks (broadcom-bt-firmware, notatki)
 ├── hooks.sh            — maybe_exec 'before_X' / 'after_X'
@@ -97,6 +98,7 @@ All config variables are defined in `CONFIG_VARS[]` in `lib/constants.sh`:
 | `PARTITION_SCHEME` | auto/dual-boot/manual | Partitioning strategy |
 | `FILESYSTEM` | ext4/btrfs/xfs | Root filesystem type |
 | `BTRFS_SUBVOLUMES` | colon-separated pairs | e.g. `@:/:@home:/home:@var:/var` |
+| `ENABLE_SNAPPER` | yes/no | Btrfs snapshots: snapper + grub-btrfs (btrfs only) |
 | `SWAP_TYPE` | zram/partition/file/none | Swap configuration method |
 | `SWAP_SIZE_MIB` | integer | Size for partition or file swap |
 | `HOSTNAME` | string | System hostname (RFC 1123) |
@@ -262,6 +264,47 @@ Detal i przepis instalacji: **`docs/macbook-apple.md`**. W skrócie, co robi kod
   `hid_apple fnmode=2`.
 - Ekran Secure Boot pomijany (Intel Mac bez T2 nie ma UEFI Secure Boot).
 - Checkpoint `apple_quirks` (po `umpc_quirks`): `broadcom-bt-firmware` + `POST-INSTALL-APPLE.txt`.
+
+#### Btrfs snapshots — snapper + grub-btrfs (issue #8)
+
+Void pakietuje pod runit dokładnie to, co na innych dystrybucjach trzeba dłubać
+ręcznie: `snapper` ma serwis `snapperd`, a **`grub-btrfs` ma serwis `grub-btrfs`**
+z `grub-btrfsd` — watcherem inotify na `/.snapshots`, który sam regeneruje menu
+GRUB (odpowiednik systemowego path unita). Harmonogram to `cronie` + run-parts
+(`/etc/cron.hourly`, `/etc/cron.daily`), bo timerów systemd nie ma.
+
+- **`create-config` kontra własny `@snapshots`.** `snapper create-config` upiera
+  się przy stworzeniu WŁASNEGO subwoluminu `.snapshots` i przewraca się, gdy
+  ścieżka jest punktem montowania. `_snapper_create_root_config()` robi standardowy
+  taniec: odmontuj nasz `@snapshots` → `create-config` → skasuj subwolumin, który
+  snapper właśnie zrobił → zamontuj nasz z powrotem. Bez tego snapshoty lądują
+  na subwoluminie, którego fstab nie zna.
+- **XBPS nie ma hooków transakcyjnych** (nie ma odpowiednika `snap-pac`), więc
+  „snapshot przed aktualizacją" jest jawnym poleceniem `xbps-snapshot -Su`
+  (`/usr/local/bin`), a nie udawaną automatyką.
+- Retencja domyślnie 5 godzinnych / 7 dziennych / 2 tygodniowe / 1 miesięczny —
+  ustawienia snappera z pudełka (10/10/10/10/10) zapychają mały SSD szybciej,
+  niż ktokolwiek się spodziewa.
+- `_snapper_set_option()` kotwiczy klucz (`^KEY=`), żeby `NUMBER_LIMIT` nie
+  nadpisał `NUMBER_LIMIT_IMPORTANT`.
+
+#### Standalone GRUB przy Secure Boot: stub, nie pełne menu
+
+`_rebuild_grub_with_sbat()` (`lib/secureboot.sh`) wkompilowywał **pełny**
+`/boot/grub/grub.cfg` do podpisanego standalone. Skutek: menu zamarza — każda
+aktualizacja kernela (i każdy wpis snapshotu od grub-btrfs) przepisuje
+**zewnętrzny** `grub.cfg`, którego taki obraz nigdy nie czyta. Nowe kernele
+znikają z menu, a bez ręcznego rebuild+resign nie da się ich dodać.
+Realny incydent na hoście z Gentoo: po bumpie kernela maszyna dalej bootowała
+stary, mimo że nowy był widoczny w `grub.cfg` (`~/dotfiles/docs/grub-btrfs-standalone.md`).
+
+Teraz embedowany jest **stub przekierowujący** (`_write_grub_redirect_stub`):
+`search --fs-uuid` → `set prefix` → `configfile` na żywy plik na dysku. Config
+nie musi być podpisany — shim weryfikuje binarkę GRUB i kernel, nie `grub.cfg`.
+Trzy warianty ścieżki: `/@/boot/grub` dla btrfs (root na subwoluminie `@`),
+`/boot/grub` dla ext4/xfs, a przy LUKS na początek dochodzi
+`cryptomount -u <uuid-bez-myślników>`, bo bez odblokowania kontenera nie ma
+czego przeszukiwać.
 
 #### Wayland-only (issue #16)
 
@@ -533,10 +576,11 @@ bash tests/test_apple.sh         # Apple/macOS detection + GPT GUID + config plu
 bash tests/test_phase_order.sh   # Structural guards: phase order, resume, rootflags, package names
 bash tests/test_luks.sh          # LUKS planning, secret handling, validation gates
 bash tests/test_wayland.sh       # Wayland-only: package swaps, greetd, verification
+bash tests/test_snapper.sh       # Snapshots + GRUB redirect stub (Secure Boot)
 bash tests/shellcheck.sh         # Static analysis / lint (needs shellcheck)
 ```
 
-All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 13 functional files (367 assertions) + `shellcheck.sh` (lints all 60 `.sh` files; needs `shellcheck` installed).
+All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 14 functional files (402 assertions) + `shellcheck.sh` (lints all 62 `.sh` files; needs `shellcheck` installed).
 
 ## Known patterns and pitfalls
 

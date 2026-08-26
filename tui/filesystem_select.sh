@@ -82,10 +82,48 @@ Example: @:/:@home:/home:@var-log:/var/log" \
         export BTRFS_SUBVOLUMES
     fi
 
+    _screen_snapshots_prompt
     _screen_luks_prompt || return "${TUI_BACK}"
 
     einfo "Filesystem: ${FILESYSTEM}, LUKS: ${LUKS_ENABLED:-no}"
     return "${TUI_NEXT}"
+}
+
+# _screen_snapshots_prompt — Offer snapper + grub-btrfs on btrfs layouts.
+#
+# Requires a @snapshots subvolume: snapper stores snapshots under /.snapshots,
+# and without a dedicated subvolume there they would end up inside @ — which
+# means every snapshot would contain the previous ones, and a rollback could
+# not work.
+_screen_snapshots_prompt() {
+    if [[ "${FILESYSTEM:-}" != "btrfs" ]]; then
+        ENABLE_SNAPPER="no"
+        export ENABLE_SNAPPER
+        return 0
+    fi
+
+    if [[ "${BTRFS_SUBVOLUMES:-}" != *"@snapshots"* ]]; then
+        ENABLE_SNAPPER="no"
+        export ENABLE_SNAPPER
+        einfo "No @snapshots subvolume in the layout — snapshots not offered"
+        return 0
+    fi
+
+    if dialog_yesno "Btrfs Snapshots" \
+        "Set up automatic snapshots (snapper + grub-btrfs)?\n\n\
+  - hourly timeline snapshot, daily cleanup (via cron)\n\
+  - snapshots appear in the GRUB menu automatically\n\
+  - 'xbps-snapshot -Su' wraps an update in two snapshots\n\n\
+Useful on a rolling release: a bad update is one reboot\n\
+away from being undone. Costs disk space — retention is\n\
+5 hourly / 7 daily / 2 weekly / 1 monthly by default."; then
+        ENABLE_SNAPPER="yes"
+    else
+        ENABLE_SNAPPER="no"
+    fi
+    export ENABLE_SNAPPER
+
+    return 0
 }
 
 # _screen_luks_prompt — Offer full-disk encryption for the root partition.

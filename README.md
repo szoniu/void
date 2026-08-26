@@ -14,6 +14,8 @@ Rdzeń jest dojrzały i na parytecie z działającym instalatorem Gentoo. Pełny
 - ✅ **`--resume` nie formatuje dysku, na którym już jest system** — brak checkpointu `disks` nie znaczy „pusty dysk"; sonda read-only (`_resume_target_has_system`) blokuje destrukcyjny plan.
 - ✅ **Konta zakładane PRZED kernelem i desktopem** — awaria długiej fazy nie zostawia już systemu, do którego nie da się zalogować.
 - ✅ **Wi-Fi w instalatorze** (ekran 4) — wpa_supplicant/dhcpcd albo NetworkManager, zależnie od tego, co jest na live medium. Sieć trafia też do zainstalowanego systemu.
+- ✅ **Snapshoty btrfs** — snapper + grub-btrfs: godzinny timeline, sprzątanie, snapshoty widoczne w menu GRUB, `xbps-snapshot -Su` opakowuje aktualizację w parę snapshotów.
+- ✅ **Naprawione zamrożone menu GRUB przy Secure Boot** — podpisany standalone dostaje stub przekierowujący zamiast wkompilowanego menu (wcześniej nowe kernele znikały z listy startowej).
 - ✅ **Tryb Wayland-only** — instalacja bez `xorg-server` (zostaje Xwayland dla apek X11). Na KDE greeter SDDM przełączany na Wayland; na GNOME GDM zastępowany przez greetd+tuigreet, bo sam GDM ciągnie Xorg.
 - ✅ **Szyfrowanie dysku (LUKS)** — kontener LUKS1 na partycji root, GRUB z `cryptodisk`, keyfile w initramfs (jedno pytanie o hasło zamiast dwóch). Hasło nigdy nie trafia do configu, logu ani do `ps`.
 - ✅ **Intel Maki (pre-T2)** — GRUB na ścieżce removable, applespi w initramfs, wykrywanie macOS/APFS. T2 (2018+) jawnie niewspierane.
@@ -211,6 +213,31 @@ Oprócz KDE Plasma i GNOME, installer oferuje opcjonalne środowiska Wayland (ek
 - **Noctalia Shell** — Wayland shell oparty na Quickshell, z wyborem kompozytora: **Hyprland**, **niri** lub **sway**. Sam shell nie jest pakietowany dla Void (dawne `noctalia-void-repo` jest martwe) — instalator kładzie kompozytor i `quickshell`, a instrukcję dokończenia zostawia w `/root/POST-INSTALL-NOCTALIA.txt`.
 
 Opcje są niezależne od siebie i od KDE/GNOME.
+
+## Snapshoty btrfs (snapper + grub-btrfs)
+
+Pytanie pojawia się na ekranie 6, gdy wybierzesz **btrfs** z układem zawierającym
+subwolumin `@snapshots`.
+
+| Co | Jak |
+|---|---|
+| Snapshot co godzinę | `cron.hourly` → `snapper timeline` |
+| Sprzątanie starych | `cron.daily` → `snapper cleanup` |
+| Snapshoty w menu GRUB | `grub-btrfsd` — watcher inotify na `/.snapshots` (serwis runit) |
+| Snapshot przed aktualizacją | `xbps-snapshot -Su` |
+
+Retencja: 5 godzinnych, 7 dziennych, 2 tygodniowe, 1 miesięczny (do zmiany
+w `/etc/snapper/configs/root`). Domyślne ustawienia snappera to 10 z każdej
+kategorii, co na małym SSD kończy się szybko.
+
+**Dlaczego `xbps-snapshot`, a nie automat:** XBPS nie ma hooków transakcyjnych —
+odpowiednika `snap-pac` z Archa po prostu nie ma. Zamiast udawać automatykę,
+instalator daje jawne polecenie, które robi snapshot, uruchamia `xbps-install`
+z Twoimi argumentami i robi snapshot po. Ściągawka lądu­je w
+`/root/POST-INSTALL-SNAPSHOTS.txt`.
+
+Rollback: z menu GRUB (podmenu snapshotów) albo `snapper rollback <numer>`.
+Użytkownicy z grupy `wheel` używają snappera bez sudo.
 
 ## Tryb Wayland-only
 
