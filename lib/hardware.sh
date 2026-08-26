@@ -177,6 +177,12 @@ detect_gpu() {
     einfo "Driver: ${GPU_DRIVER}"
     [[ "${HYBRID_GPU}" == "yes" ]] && einfo "Hybrid: ${IGPU_VENDOR} iGPU + ${DGPU_VENDOR} dGPU"
     [[ "${GPU_VENDOR}" == "nvidia" ]] && einfo "NVIDIA open kernel: ${GPU_USE_NVIDIA_OPEN}"
+
+    # Explicit success: the line above is a bare test, so on anything that is
+    # not NVIDIA the function would return 1 — and detect_all_hardware runs
+    # under `set -e`. Today the wizard calls it from a conditional context
+    # (which suspends errexit), so it merely looked harmless.
+    return 0
 }
 
 # --- ASUS ROG Detection ---

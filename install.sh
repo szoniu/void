@@ -379,6 +379,7 @@ _do_chroot_phases() {
         xbps_install_base
         install_extra_packages
         install_power_management
+        configure_flatpak
         # After extras: a package chosen there can still pull in Xorg,
         # so the Wayland-only claim is verified, not assumed.
         verify_wayland_only

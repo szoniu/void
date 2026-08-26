@@ -1375,3 +1375,98 @@ EOF
 
     einfo "  Notes written to ${note}"
 }
+
+# configure_flatpak — Add the Flathub remote and wire up the desktop bits.
+#
+# Installing the `flatpak` package alone leaves a system where `flatpak
+# install` fails with "no remote refs found": there is no configured
+# repository, and nothing in the installer used to add one. Two more pieces
+# are needed for installed apps to behave like native ones:
+#   - a portal implementation, or file dialogs and screen sharing inside the
+#     sandbox silently do nothing
+#   - /var/lib/flatpak/exports/share on XDG_DATA_DIRS, or the apps install
+#     fine and then never appear in the menu
+configure_flatpak() {
+    # Only when the user actually asked for flatpak on the extras screen
+    [[ "${EXTRA_PACKAGES:-}" == *flatpak* ]] || return 0
+
+    einfo "Configuring Flatpak..."
+
+    if ! command -v flatpak >/dev/null 2>&1; then
+        ewarn "flatpak is not installed — skipping Flathub setup"
+        return 0
+    fi
+
+    # A portal is what lets sandboxed apps open files and share the screen.
+    # GNOME has its own; everything else gets the GTK one.
+    local portal="xdg-desktop-portal-gtk"
+    [[ "${DESKTOP_TYPE:-kde}" == "gnome" ]] && portal="xdg-desktop-portal-gnome"
+    [[ "${DESKTOP_TYPE:-kde}" == "kde" ]] && portal="xdg-desktop-portal-kde"
+
+    xbps-install -y xdg-desktop-portal "${portal}" 2>/dev/null \
+        || ewarn "Could not install ${portal} — file dialogs in flatpaks may not work"
+
+    # remote-add fetches the .flatpakrepo (which carries the GPG key), so it
+    # needs network. Failure here is not fatal: the user can rerun the same
+    # command later, and it is written into the notes below.
+    if flatpak remote-add --if-not-exists flathub \
+        https://dl.flathub.org/repo/flathub.flatpakrepo 2>/dev/null; then
+        einfo "  Flathub remote added"
+    else
+        ewarn "Could not add the Flathub remote (no network?) — see /root/POST-INSTALL-FLATPAK.txt"
+    fi
+
+    _flatpak_write_profile
+    _flatpak_write_note
+
+    einfo "Flatpak configured"
+}
+
+# _flatpak_write_profile — Put flatpak exports on XDG_DATA_DIRS.
+# Without this, installed flatpaks never show up in the application menu:
+# their .desktop files live under /var/lib/flatpak/exports/share, which the
+# default XDG_DATA_DIRS does not include.
+_flatpak_write_profile() {
+    mkdir -p /etc/profile.d
+    cat > /etc/profile.d/flatpak.sh << 'EOF'
+# Flatpak exports on XDG_DATA_DIRS — written by the Void installer.
+# Without this, installed flatpaks do not appear in the application menu.
+case ":${XDG_DATA_DIRS:-/usr/local/share:/usr/share}:" in
+    *":/var/lib/flatpak/exports/share:"*) ;;
+    *) export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}:/var/lib/flatpak/exports/share:$HOME/.local/share/flatpak/exports/share" ;;
+esac
+EOF
+    chmod 644 /etc/profile.d/flatpak.sh
+    einfo "  XDG_DATA_DIRS extended for flatpak exports"
+}
+
+# _flatpak_write_note — What to do if the remote could not be added.
+_flatpak_write_note() {
+    cat > /root/POST-INSTALL-FLATPAK.txt << 'EOF'
+Flatpak
+=======
+
+Flathub remote (rerun if it could not be added during install — it needs
+network):
+
+  flatpak remote-add --if-not-exists flathub \
+      https://dl.flathub.org/repo/flathub.flatpakrepo
+
+Then:
+
+  flatpak search <name>
+  flatpak install flathub <app-id>
+  flatpak update
+
+Notes
+-----
+- Applications appear in the menu because /etc/profile.d/flatpak.sh puts
+  /var/lib/flatpak/exports/share on XDG_DATA_DIRS. Log out and back in after
+  the first install if an entry is missing.
+- A portal (xdg-desktop-portal + the one matching your desktop) is installed:
+  without it, file dialogs and screen sharing inside a sandboxed app fail
+  silently.
+- Per-user installs: flatpak install --user flathub <app-id>
+EOF
+    einfo "  Notes written to /root/POST-INSTALL-FLATPAK.txt"
+}
