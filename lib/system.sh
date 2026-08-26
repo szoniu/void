@@ -203,6 +203,14 @@ system_create_users() {
     if [[ -n "${ROOT_PASSWORD_HASH:-}" ]]; then
         einfo "Setting root password"
         bash -c 'echo "root:$1" | chpasswd -e' -- "${ROOT_PASSWORD_HASH}"
+    else
+        # A resume that could not recover the config reaches this with an empty
+        # hash. Silently leaving the ROOTFS's locked '*' root password plus no
+        # user account produces a system nobody can log into — say so loudly.
+        ewarn "ROOT_PASSWORD_HASH is empty — root password NOT set!"
+        ewarn "The ROOTFS ships root locked ('*'). Unless a user account with"
+        ewarn "sudo is created below, this system will not be loginnable."
+        ewarn "Recover from a live medium: chroot in and run 'passwd'."
     fi
 
     # Create regular user
@@ -255,6 +263,39 @@ _enable_service() {
     else
         ewarn "Service not found: ${service}"
     fi
+}
+
+# install_power_management — Laptop power management (battery-gated).
+#
+# power-profiles-daemon is what the GNOME and KDE power applets talk to; with
+# nothing providing that D-Bus service the desktop shows no power profiles at
+# all. thermald handles Intel thermal throttling — it matters more, not less,
+# on fanless machines (12" MacBook, UMPCs), where the only way to shed heat is
+# to clock down in a controlled way.
+install_power_management() {
+    if [[ ! -d /sys/class/power_supply/BAT0 && ! -d /sys/class/power_supply/BAT1 ]]; then
+        einfo "No battery detected — skipping laptop power management"
+        return 0
+    fi
+
+    einfo "Battery detected — installing power management..."
+
+    if xbps-install -y power-profiles-daemon 2>/dev/null; then
+        _enable_service "power-profiles-daemon"
+    else
+        ewarn "power-profiles-daemon not available — desktop power profiles will be missing"
+    fi
+
+    # thermald is Intel-only; on AMD it does nothing useful.
+    if grep -qi 'GenuineIntel' /proc/cpuinfo 2>/dev/null; then
+        if xbps-install -y thermald 2>/dev/null; then
+            _enable_service "thermald"
+        else
+            ewarn "thermald not available"
+        fi
+    fi
+
+    einfo "Power management installed"
 }
 
 # system_finalize — Final system configuration

@@ -88,11 +88,40 @@ Make sure you have a full backup before continuing." || true
     done < <(lsblk -lno NAME,SIZE,FSTYPE,LABEL "${disk}" 2>/dev/null | tail -n +2)
 
     if [[ ${#shrink_items[@]} -eq 0 ]]; then
-        dialog_msgbox "Cannot Shrink" \
-            "No shrinkable partitions found on ${disk}.\n\n\
+        # APFS/HFS+ deserve their own message: no Linux tool can resize an
+        # APFS container, so "unsupported filesystem" would send the user
+        # looking for a package that does not exist.
+        local has_macos_fs=0
+        local mline mfstype
+        while IFS= read -r mline; do
+            mfstype=$(awk '{print $3}' <<< "${mline}")
+            if declare -F apple_fstype_is_macos >/dev/null && \
+               [[ -n "${mfstype}" ]] && apple_fstype_is_macos "${mfstype}"; then
+                has_macos_fs=1
+                break
+            fi
+        done < <(lsblk -lno NAME,SIZE,FSTYPE "${disk}" 2>/dev/null | tail -n +2)
+
+        if [[ ${has_macos_fs} -eq 1 ]]; then
+            dialog_msgbox "Cannot Shrink macOS Partition" \
+                "${disk} holds an APFS/HFS+ (macOS) partition and there is not\n\
+enough free space for Void.\n\n\
+APFS CANNOT be resized from Linux — no tool exists.\n\n\
+Do this instead:\n\
+  1. Reboot into macOS\n\
+  2. Disk Utility -> select the container -> Partition\n\
+     (or: diskutil apfs resizeContainer diskXsY <newsize>)\n\
+  3. Leave at least 30 GiB of FREE space (do not create\n\
+     a partition there — the installer will)\n\
+  4. Boot this installer again\n\n\
+Back up with Time Machine first."
+        else
+            dialog_msgbox "Cannot Shrink" \
+                "No shrinkable partitions found on ${disk}.\n\n\
 Supported filesystems: NTFS, ext4, btrfs.\n\
 XFS cannot be shrunk.\n\n\
 Please use manual partitioning instead."
+        fi
         return "${TUI_BACK}"
     fi
 
@@ -245,15 +274,19 @@ screen_disk_select() {
     TARGET_DISK="${selected_disk}"
     export TARGET_DISK
 
-    # Partition scheme — offer dual-boot if Windows OR Linux detected
+    # Partition scheme — offer dual-boot if Windows, Linux OR macOS detected
     local scheme
-    if [[ "${WINDOWS_DETECTED:-0}" == "1" || "${LINUX_DETECTED:-0}" == "1" ]]; then
+    if [[ "${WINDOWS_DETECTED:-0}" == "1" || "${LINUX_DETECTED:-0}" == "1" || \
+          "${MACOS_DETECTED:-0}" == "1" ]]; then
         local dualboot_desc="Dual-boot (reuse existing ESP)"
         [[ "${WINDOWS_DETECTED:-0}" == "1" ]] && dualboot_desc="Dual-boot with Windows (reuse existing ESP)"
         [[ "${LINUX_DETECTED:-0}" == "1" && "${WINDOWS_DETECTED:-0}" == "1" ]] && \
             dualboot_desc="Dual-boot with Windows + Linux (reuse existing ESP)"
         [[ "${LINUX_DETECTED:-0}" == "1" && "${WINDOWS_DETECTED:-0}" != "1" ]] && \
             dualboot_desc="Dual-boot with Linux (reuse existing ESP)"
+        [[ "${MACOS_DETECTED:-0}" == "1" && "${WINDOWS_DETECTED:-0}" != "1" && \
+           "${LINUX_DETECTED:-0}" != "1" ]] && \
+            dualboot_desc="Dual-boot with macOS (reuse Apple ESP)"
 
         scheme=$(dialog_menu "Partition Scheme" \
             "dual-boot"  "${dualboot_desc}" \
@@ -349,9 +382,43 @@ Type ERASE in the next dialog to confirm."
             ESP_REUSE="no"
             export ESP_REUSE
 
-            dialog_yesno "WARNING: Data Destruction" \
-                "Auto-partitioning will DESTROY ALL DATA on:\n\n  ${TARGET_DISK}\n\nAre you sure?" \
-                || return "${TUI_BACK}"
+            # List operating systems living on THIS disk. A plain yes/no is
+            # too weak a gate when a whole macOS/Windows install is about to
+            # be erased, so those cases escalate to typing ERASE.
+            local os_list="" os_part
+            # Guard: DETECTED_OSES may be undeclared (config loaded from a
+            # preset, resume path) and ${!arr[@]} is fatal under set -u.
+            if declare -p DETECTED_OSES >/dev/null 2>&1; then
+                for os_part in "${!DETECTED_OSES[@]}"; do
+                    [[ "${os_part}" == "${TARGET_DISK}"* ]] || continue
+                    os_list+="  ${os_part}: ${DETECTED_OSES[${os_part}]}\n"
+                done
+            fi
+
+            if [[ -n "${os_list}" ]]; then
+                dialog_msgbox "WARNING: Existing Operating Systems" \
+                    "!!! DANGER !!!\n\n\
+Auto-partitioning ${TARGET_DISK} will PERMANENTLY DESTROY:\n\n\
+${os_list}\n\
+Everything on this disk will be lost, including any\n\
+recovery partition.\n\n\
+Type ERASE in the next dialog to confirm."
+
+                local auto_erase
+                auto_erase=$(dialog_inputbox "Confirm Destruction" \
+                    "Type ERASE to wipe ${TARGET_DISK} and every OS on it:" \
+                    "") || return "${TUI_BACK}"
+
+                if [[ "${auto_erase}" != "ERASE" ]]; then
+                    dialog_msgbox "Cancelled" \
+                        "Auto-partitioning cancelled. You typed: '${auto_erase}'"
+                    return "${TUI_BACK}"
+                fi
+            else
+                dialog_yesno "WARNING: Data Destruction" \
+                    "Auto-partitioning will DESTROY ALL DATA on:\n\n  ${TARGET_DISK}\n\nAre you sure?" \
+                    || return "${TUI_BACK}"
+            fi
             ;;
         manual)
             dialog_msgbox "Manual Partitioning" \

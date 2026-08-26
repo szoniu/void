@@ -2,15 +2,19 @@
 
 Interaktywny installer Void Linux z interfejsem TUI (gum/dialog). Przeprowadza za rękę przez cały proces instalacji — od partycjonowania dysku po działający desktop KDE Plasma. Po awarii: `./install.sh --resume` skanuje dyski i wznawia od ostatniego checkpointu.
 
-## Status (audyt 2026-05-17, po naprawach)
+## Status (audyt 2026-05-17; sync z instalatorem Gentoo 2026-08-26)
 
-Rdzeń jest dojrzały i na parytecie z działającym instalatorem Gentoo. Wszystkie luki wykryte w audycie zostały naprawione. Pełny zestaw: 9 plików testowych (255 asercji) + `shellcheck` (52 pliki czyste) — wszystko zielone.
+Rdzeń jest dojrzały i na parytecie z działającym instalatorem Gentoo. Pełny zestaw: 11 plików testowych (312 asercji) + `shellcheck` (57 plików czystych) — wszystko zielone.
 
 - ✅ **Instalacja na czystym dysku** (`scheme=auto`, x86_64) — bezpieczna.
 - ✅ **Dual-boot / shrink** — dodano twardą bramkę bezpieczeństwa (odmowa zmniejszenia poniżej zajętego miejsca + margines 1 GiB, dry-run NTFS) oraz odporne liczenie numeru partycji. Standardowe zalecenie kopii zapasowej przed dual-bootem nadal obowiązuje.
 - ✅ **Guard architektury** — na nie-x86_64 instalator przerywa od razu, **przed** dotknięciem dysku.
 - ✅ **Bezpieczeństwo pobierania** — wymuszony HTTPS dla mirrora, kontrole integralności shima.
 - ✅ **`--resume`** — nie maskuje błędów montowania; chroot zawsze z aktualną kopią instalatora i podmontowanym ESP; checkpoint kernela respektuje zmianę typu jądra.
+- ✅ **`--resume` nie formatuje dysku, na którym już jest system** — brak checkpointu `disks` nie znaczy „pusty dysk"; sonda read-only (`_resume_target_has_system`) blokuje destrukcyjny plan.
+- ✅ **Konta zakładane PRZED kernelem i desktopem** — awaria długiej fazy nie zostawia już systemu, do którego nie da się zalogować.
+- ✅ **Wi-Fi w instalatorze** (ekran 4) — wpa_supplicant/dhcpcd albo NetworkManager, zależnie od tego, co jest na live medium. Sieć trafia też do zainstalowanego systemu.
+- ✅ **Intel Maki (pre-T2)** — GRUB na ścieżce removable, applespi w initramfs, wykrywanie macOS/APFS. T2 (2018+) jawnie niewspierane.
 
 Szczegóły napraw w `CLAUDE.md` → „Readiness status".
 
@@ -55,6 +59,16 @@ ping -c 3 voidlinux.org
 
 #### WiFi (bezprzewodowo)
 
+**Najprościej: nie rób nic.** Installer ma własny ekran Wi-Fi (ekran 4) — pokazuje
+się automatycznie, gdy sieci nie ma. Skanuje, pyta o hasło i podnosi link
+(NetworkManagerem, jeśli live go ma; inaczej wpa_supplicant + dhcpcd). Wybrana sieć
+jest **zapisywana do instalowanego systemu**, więc pierwszy boot wstaje online.
+
+Hasło nigdy nie trafia do argumentów procesu (`ps`) — `wpa_passphrase` czyta je ze
+stdin, a zapisywany jest wyłącznie wyliczony 64-znakowy PSK.
+
+Jeśli wolisz zrobić to ręcznie **przed** uruchomieniem installera:
+
 **Opcja A: `wpa_supplicant`** — dostępny na Void Live ISO:
 
 ```bash
@@ -69,12 +83,19 @@ wpa_supplicant -B -i wlan0 -c <(wpa_passphrase "NazwaTwojejSieci" "TwojeHaslo")
 dhcpcd wlan0
 ```
 
-**Opcja B: `nmcli` (NetworkManager)** — na xfce live:
+**Opcja B: `nmcli` (NetworkManager)** — na desktopowych wariantach live (xfce, gnome, kde):
 
 ```bash
 nmcli device wifi list
 nmcli device wifi connect 'NazwaTwojejSieci' password 'TwojeHaslo'
 ```
+
+Na tych wariantach jest też **aplet w tacce** — Wi-Fi klika się myszką, bez terminala.
+
+> **Laptop bez portu Ethernet** (MacBook 12", ultrabook z samym USB-C): weź wariant
+> **xfce** zamiast `base` — dostajesz aplet Wi-Fi i przeglądarkę. Firmware
+> sieciowe (w tym Broadcom) jest na każdym wariancie: `linux-base` ciągnie
+> `linux-firmware-network`.
 
 **Sprawdź połączenie:**
 
@@ -107,6 +128,16 @@ Po zalogowaniu — aktualizacja systemu i pakietów:
 sudo xbps-install -Su
 ```
 
+Reszta środowiska (motywy, ekosystem niri/Waybar, narzędzia CLI) idzie z repo dotfiles:
+
+```bash
+git clone https://github.com/szoniu/dotfiles.git ~/dotfiles
+bash ~/dotfiles/wizard.sh --install-all
+```
+
+Logi instalacji zostają na dysku: `/var/log/void-installer.log` (faza chroot),
+`-outer.log` (dyski/ROOTFS) i `-skipped.log` (kroki pominięte po błędzie).
+
 ## Alternatywne sposoby uruchomienia
 
 ```bash
@@ -129,32 +160,33 @@ sudo xbps-install -Su
 - Komputer z **UEFI** (nie Legacy BIOS)
 - **Secure Boot** — obsługiwany (MOK/shim) lub wyłączony
 - Minimum **10 GiB** wolnego miejsca na dysku docelowym
-- Połączenie z internetem (LAN lub WiFi)
+- Połączenie z internetem (LAN lub WiFi — installer ma ekran konfiguracji Wi-Fi)
 - Bootowalny pendrive z Void Live ISO (lub dowolne live z `bash` i `git`)
 
 ## Co robi installer
 
-17 ekranów TUI prowadzi przez:
+18 ekranów TUI prowadzi przez:
 
 | # | Ekran | Co konfigurujesz |
 |---|-------|-------------------|
 | 1 | Welcome | Sprawdzenie wymagań (root, UEFI, sieć) |
 | 2 | Preset | Opcjonalne załadowanie gotowej konfiguracji |
 | 3 | Hardware | Podgląd wykrytego CPU, GPU, dysków, peryferiali, zainstalowanych OS-ów (w tym Microsoft Surface i Secure Boot) |
-| 4 | Dysk | Wybór dysku + schemat (auto/dual-boot/manual) + shrink wizard |
-| 5 | Filesystem | ext4 / btrfs (ze subvolumes) / XFS |
-| 6 | Swap | zram (domyślnie) / partycja / plik / brak |
-| 7 | Sieć | Hostname + mirror Void |
-| 8 | Locale | Timezone, język, keymap |
-| 9 | Kernel | mainline (rolling) / LTS (stabilny) / surface-patched (kompilowany ze źródeł, na Surface) |
-| 10 | Secure Boot | Opcjonalne podpisanie kernela i GRUB-a (MOK/shim). Tylko na EFI. |
-| 11 | GPU | Auto-wykryty sterownik + hybrid GPU (PRIME offload) + NVIDIA open |
-| 12 | Desktop | KDE/GNOME + wybór aplikacji (Firefox, Thunderbird, Kate...) |
-| 13 | Użytkownicy | Hasło root, konto użytkownika, grupy |
-| 14 | Pakiety | Dodatkowe pakiety + wykryte peryferiale (Bluetooth, fingerprint, Thunderbolt, IIO sensors, webcam, WWAN) + ASUS ROG/TUF tools + Surface tools (iptsd) + Hyprland + Noctalia Shell |
-| 15 | Preset save | Opcjonalny eksport konfiguracji na przyszłość |
-| 16 | Podsumowanie | Pełny przegląd + potwierdzenie "YES" + countdown |
-| 17 | Instalacja | Progress bar + live output z chroot |
+| 4 | WiFi | Pomijany, gdy sieć działa. Skan SSID + hasło; profil trafia też do instalowanego systemu |
+| 5 | Dysk | Wybór dysku + schemat (auto/dual-boot/manual) + shrink wizard |
+| 6 | Filesystem | ext4 / btrfs (ze subvolumes) / XFS |
+| 7 | Swap | zram (domyślnie) / partycja / plik / brak |
+| 8 | Sieć | Hostname + mirror Void |
+| 9 | Locale | Timezone, język, keymap |
+| 10 | Kernel | mainline (rolling) / LTS (stabilny) / surface-patched (kompilowany ze źródeł, na Surface) |
+| 11 | Secure Boot | Opcjonalne podpisanie kernela i GRUB-a (MOK/shim). Tylko na EFI. |
+| 12 | GPU | Auto-wykryty sterownik + hybrid GPU (PRIME offload) + NVIDIA open |
+| 13 | Desktop | KDE/GNOME + wybór aplikacji (Firefox, Thunderbird, Kate...) |
+| 14 | Użytkownicy | Hasło root, konto użytkownika, grupy |
+| 15 | Pakiety | Dodatkowe pakiety + wykryte peryferiale (Bluetooth, fingerprint, Thunderbolt, IIO sensors, webcam, WWAN) + ASUS ROG/TUF tools + Surface tools (iptsd) + **niri** + Hyprland + Noctalia Shell |
+| 16 | Preset save | Opcjonalny eksport konfiguracji na przyszłość |
+| 17 | Podsumowanie | Pełny przegląd + potwierdzenie "YES" + countdown |
+| 18 | Instalacja | Progress bar + live output z chroot |
 
 ### Wykrywanie hardware
 
@@ -164,16 +196,19 @@ Installer automatycznie wykrywa i konfiguruje:
 - **Microsoft Surface** — wykrywanie przez DMI (sys_vendor + product_name). Oferuje kernel surface-patched (kompilacja ze źródeł z patchami linux-surface) i iptsd (touchscreen daemon dla urządzeń z IPTS). Surface Laptop Go nie wymaga iptsd — touchscreen działa na standardowym kernelu.
 - **ASUS ROG/TUF** — wykrywanie przez DMI sysfs. Gdy wykryty, oferuje instalację `asusctl` (sterowanie wentylatorami, RGB, profile wydajności) z serwisem `asusd`.
 - **Secure Boot** — wykrywanie stanu EFI. Opcjonalne podpisywanie kernela i GRUB-a kluczem MOK, shim z Fedory (podpisany przez Microsoft UEFI CA). Przy pierwszym restarcie MokManager pyta o enrollment klucza (hasło: `void`). Hook w `/etc/kernel.d/` automatycznie podpisuje kernel przy aktualizacjach XBPS.
+- **Intel Mac (MacBook/iMac, pre-T2)** — wykrywanie po DMI. GRUB ląduje także na ścieżce removable (`EFI/BOOT/BOOTX64.EFI`), bo firmware Apple gubi wpisy NVRAM; moduły SPI (`applespi`) trafiają do initramfs, inaczej po pierwszym boocie nie ma klawiatury; dokładany jest `broadcom-bt-firmware`. Partycje macOS (APFS/HFS+) są rozpoznawane po GPT GUID, więc tryb `auto` żąda wpisania `ERASE` zamiast po cichu wyczyścić dysk. Maki z **T2** (2018+) są jawnie niewspierane. Szczegóły: [`docs/macbook-apple.md`](docs/macbook-apple.md).
+- **Zasilanie laptopa** — po wykryciu baterii instalowany jest `power-profiles-daemon` (bez niego aplet zasilania w GNOME/KDE nie ma żadnych profili) oraz `thermald` na Intelu.
 - **Peryferiale** — 6 automatycznych detekcji: Bluetooth, czytnik linii papilarnych (fprintd + PAM config dla SDDM/KDE), Thunderbolt (bolt), czujniki IIO (iio-sensor-proxy), kamera, WWAN/LTE (ModemManager). Wykryte urządzenia pojawiają się jako opcje w ekranie pakietów.
 
 ### Opcjonalne środowiska Wayland
 
-Oprócz KDE Plasma, installer oferuje dwa opcjonalne środowiska Wayland (ekran 13 — Pakiety):
+Oprócz KDE Plasma i GNOME, installer oferuje opcjonalne środowiska Wayland (ekran 15 — Pakiety):
 
-- **Hyprland ecosystem** — standalone ekosystem tiling Wayland compositor: Hyprland + hyprpaper, hypridle, hyprlock, waybar, wofi, mako, grim, slurp, wl-clipboard, brightnessctl. Niezależny od Noctalia i KDE.
-- **Noctalia Shell** — nowoczesny Wayland shell (oparty na Quickshell) z wyborem kompozytora: **Hyprland**, **niri** lub **sway**. Instalowany z repozytorium third-party (`noctalia-void-repo`). Generuje gotową konfigurację kompozytora z autostartowaniem Noctalia Shell i keybindami IPC.
+- **niri ecosystem** — scrollable-tiling compositor: `niri` + `xwayland-satellite` (bez tego apki X11 nie ruszą — niri nie ma wbudowanego Xwaylanda), `Waybar`, `fuzzel`, `mako`, `swaylock`/`swayidle`/`swaybg`, `grim`, `slurp`, `wl-clipboard`, `brightnessctl`. **Wszystko z oficjalnego repo Void.** Instalator pisze też minimalny `config.kdl` (na sprzęcie Apple ze `scale 1.5`) i `niri-portals.conf` — bez tego okna wyboru pliku w GTK/Electronach nie pojawiają się w ogóle. Sesja niri wyświetla się w GDM/SDDM obok GNOME/KDE.
+- **Hyprland ecosystem** — Hyprland + hyprpaper, hypridle, hyprlock, `Waybar`, wofi, mako, grim, slurp, wl-clipboard, brightnessctl. **Uwaga:** Hyprlanda nie ma w oficjalnym repo Void — instalator dodaje repo third-party, ale **tylko po sprawdzeniu, że odpowiada** (martwy wpis w `/etc/xbps.d/` psuje każde `xbps-install -S`, a osierocony pakiet potrafi zablokować aktualizację całego systemu).
+- **Noctalia Shell** — Wayland shell oparty na Quickshell, z wyborem kompozytora: **Hyprland**, **niri** lub **sway**. Sam shell nie jest pakietowany dla Void (dawne `noctalia-void-repo` jest martwe) — instalator kładzie kompozytor i `quickshell`, a instrukcję dokończenia zostawia w `/root/POST-INSTALL-NOCTALIA.txt`.
 
-Obie opcje można wybrać niezależnie od siebie i od KDE Plasma.
+Opcje są niezależne od siebie i od KDE/GNOME.
 
 ## Dual-boot (Windows, Linux, multi-boot)
 

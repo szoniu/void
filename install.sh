@@ -48,6 +48,7 @@ source "${LIB_DIR}/system.sh"
 source "${LIB_DIR}/desktop.sh"
 source "${LIB_DIR}/swap.sh"
 source "${LIB_DIR}/umpc.sh"
+source "${LIB_DIR}/apple.sh"
 source "${LIB_DIR}/chroot.sh"
 source "${LIB_DIR}/hooks.sh"
 source "${LIB_DIR}/preset.sh"
@@ -56,6 +57,7 @@ source "${LIB_DIR}/preset.sh"
 source "${TUI_DIR}/welcome.sh"
 source "${TUI_DIR}/preset_load.sh"
 source "${TUI_DIR}/hw_detect.sh"
+source "${TUI_DIR}/wifi_config.sh"
 source "${TUI_DIR}/disk_select.sh"
 source "${TUI_DIR}/filesystem_select.sh"
 source "${TUI_DIR}/swap_config.sh"
@@ -195,6 +197,7 @@ run_configuration_wizard() {
         screen_welcome \
         screen_preset_load \
         screen_hw_detect \
+        screen_wifi_config \
         screen_disk_select \
         screen_filesystem_select \
         screen_swap_config \
@@ -255,6 +258,23 @@ _do_chroot_phases() {
         checkpoint_set "system_config"
     else
         einfo "Skipping system config (checkpoint reached)"
+    fi
+
+    # Phase 6b: Users — deliberately BEFORE kernel/desktop.
+    # These are the longest and most failure-prone phases; when one of them
+    # failed the users phase never ran, leaving root with the ROOTFS's locked
+    # '*' password and no user account: an unloginnable system (no user for
+    # SDDM/GDM, SSH root blocked). This locked out a real GPD Pocket 4 in the
+    # Gentoo installer. Creating accounts first also means /etc/skel configs
+    # written later by the desktop phase can be copied into a real home.
+    if ! checkpoint_reached "users"; then
+        einfo "--- Phase: Users ---"
+        maybe_exec 'before_users'
+        system_create_users
+        maybe_exec 'after_users'
+        checkpoint_set "users"
+    else
+        einfo "Skipping users (checkpoint reached)"
     fi
 
     # Phase 7: Kernel
@@ -335,24 +355,15 @@ _do_chroot_phases() {
         einfo "Skipping desktop (checkpoint reached)"
     fi
 
-    # Phase 13: Users
-    if ! checkpoint_reached "users"; then
-        einfo "--- Phase: Users ---"
-        maybe_exec 'before_users'
-        system_create_users
-        maybe_exec 'after_users'
-        checkpoint_set "users"
-    else
-        einfo "Skipping users (checkpoint reached)"
-    fi
-
     # Phase 14: Extras
     if ! checkpoint_reached "extras"; then
         einfo "--- Phase: Extra packages ---"
         maybe_exec 'before_extras'
         xbps_install_base
         install_extra_packages
+        install_power_management
         install_hyprland_ecosystem
+        install_niri_ecosystem
         install_noctalia_shell
         install_gaming
         install_fingerprint_tools
@@ -381,6 +392,19 @@ _do_chroot_phases() {
         einfo "Skipping UMPC quirks (checkpoint reached)"
     fi
 
+    # Phase 15b: Apple quirks (Broadcom bluetooth firmware, Wi-Fi profile
+    # carry-over, post-install notes). The module/dracut config is written
+    # earlier, inside kernel_install, because it has to precede the initramfs.
+    if ! checkpoint_reached "apple_quirks"; then
+        einfo "--- Phase: Apple quirks ---"
+        maybe_exec 'before_apple_quirks'
+        apple_apply_quirks
+        maybe_exec 'after_apple_quirks'
+        checkpoint_set "apple_quirks"
+    else
+        einfo "Skipping Apple quirks (checkpoint reached)"
+    fi
+
     # Phase 16: Finalize
     if ! checkpoint_reached "finalize"; then
         einfo "--- Phase: Finalization ---"
@@ -401,6 +425,30 @@ run_post_install() {
 
     # Copy bundled gum binary to target system (not in Void repos, needed for dotfiles wizard)
     _install_gum_to_target
+
+    # Steps the user chose to skip after a failure — the install may be
+    # incomplete and nothing else would say so.
+    local skipped_report=""
+    local target_skipped="${MOUNTPOINT}/var/log/void-installer-skipped.log"
+    if [[ -s "${target_skipped}" ]]; then
+        skipped_report=$(cut -f2 "${target_skipped}" 2>/dev/null | sort -u | sed 's/^/  - /') || true
+    fi
+
+    # The outer process (disks/ROOTFS/mount) logs to tmpfs — keep a copy on the
+    # installed system. Separate file so it cannot clobber the chroot log.
+    if [[ "${DRY_RUN:-0}" != "1" ]] && mountpoint -q "${MOUNTPOINT}" 2>/dev/null; then
+        mkdir -p "${MOUNTPOINT}/var/log" 2>/dev/null || true
+        cp "${LOG_FILE}" "${MOUNTPOINT}/var/log/void-installer-outer.log" 2>/dev/null || true
+    fi
+
+    if [[ -n "${skipped_report}" ]]; then
+        dialog_msgbox "Installation Incomplete" \
+            "SOME STEPS WERE SKIPPED after a failure (you chose 'continue').\n\n\
+The system may be INCOMPLETE — finish these manually\n\
+(full list in /var/log/void-installer-skipped.log):\n\n\
+${skipped_report}" || true
+        ewarn "Skipped steps recorded in /var/log/void-installer-skipped.log"
+    fi
 
     # Unmount everything
     unmount_filesystems
@@ -472,6 +520,15 @@ preflight_checks() {
 
 # --- Entry point ---
 main() {
+    # The chroot phase must log somewhere that survives a reboot: /tmp is
+    # tmpfs, so after a crash + reboot + --resume there was NO log left —
+    # precisely when it is needed most. /var/log is on the target filesystem.
+    if [[ "${MODE}" == "chroot" && "${DRY_RUN:-0}" != "1" ]]; then
+        LOG_FILE="/var/log/void-installer.log"
+        LOG_APPEND=1
+        SKIPPED_LOG="/var/log/void-installer-skipped.log"
+    fi
+
     init_logging
 
     einfo "========================================="

@@ -48,8 +48,12 @@ screen_extra_packages() {
         checklist_args+=("surface-tools" "Surface touchscreen daemon (iptsd)" "on")
     fi
 
-    # Hyprland ecosystem — standalone Wayland desktop
-    checklist_args+=("hyprland-ecosystem" "Hyprland + ekosystem (waybar, wofi, mako, grim...)" "$( [[ "${ENABLE_HYPRLAND:-no}" == "yes" ]] && echo "on" || echo "off" )")
+    # niri ecosystem — scrollable-tiling Wayland session (all packages are in
+    # official Void repos, unlike the Hyprland stack)
+    checklist_args+=("niri-ecosystem" "niri + ekosystem (Waybar, fuzzel, mako, xwayland-satellite...)" "$( [[ "${ENABLE_NIRI:-no}" == "yes" ]] && echo "on" || echo "off" )")
+
+    # Hyprland ecosystem — standalone Wayland desktop (needs a third-party repo)
+    checklist_args+=("hyprland-ecosystem" "Hyprland + ekosystem (Waybar, wofi, mako, grim... — repo third-party)" "$( [[ "${ENABLE_HYPRLAND:-no}" == "yes" ]] && echo "on" || echo "off" )")
 
     # Noctalia Shell — Wayland shell with compositor
     checklist_args+=("noctalia-shell" "Noctalia Shell (Wayland shell + compositor)" "$( [[ "${ENABLE_NOCTALIA:-no}" == "yes" ]] && echo "on" || echo "off" )")
@@ -107,6 +111,9 @@ screen_extra_packages() {
             hyprland-ecosystem)
                 ENABLE_HYPRLAND="yes"
                 ;;
+            niri-ecosystem)
+                ENABLE_NIRI="yes"
+                ;;
             gaming)
                 ENABLE_GAMING="yes"
                 # Gaming requires nonfree repo (Steam)
@@ -130,7 +137,7 @@ screen_extra_packages() {
         esac
     done
 
-    export ENABLE_NONFREE ENABLE_HYPRLAND ENABLE_NOCTALIA ENABLE_GAMING \
+    export ENABLE_NONFREE ENABLE_HYPRLAND ENABLE_NIRI ENABLE_NOCTALIA ENABLE_GAMING \
            ENABLE_ASUSCTL ENABLE_FINGERPRINT ENABLE_THUNDERBOLT ENABLE_SENSORS ENABLE_WWAN \
            ENABLE_IPTSD
 
@@ -152,6 +159,7 @@ Leave empty to skip:" \
     einfo "Extra packages: ${EXTRA_PACKAGES:-none}"
     [[ "${ENABLE_NONFREE}" == "yes" ]] && einfo "Nonfree repository: enabled"
     [[ "${ENABLE_HYPRLAND}" == "yes" ]] && einfo "Hyprland ecosystem: enabled"
+    [[ "${ENABLE_NIRI:-no}" == "yes" ]] && einfo "niri ecosystem: enabled"
     [[ "${ENABLE_NOCTALIA}" == "yes" ]] && einfo "Noctalia Shell: enabled (compositor: ${NOCTALIA_COMPOSITOR:-Hyprland})"
     [[ "${ENABLE_GAMING}" == "yes" ]] && einfo "Gaming: enabled (Steam, gamescope, MangoHud)"
     [[ "${ENABLE_ASUSCTL}" == "yes" ]] && einfo "ASUS ROG tools: enabled"

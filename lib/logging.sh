@@ -68,6 +68,13 @@ die_trace() {
 # Initialize log file
 init_logging() {
     mkdir -p "$(dirname "${LOG_FILE}")"
-    : > "${LOG_FILE}"
+    if [[ "${LOG_APPEND:-0}" == "1" && -f "${LOG_FILE}" ]]; then
+        # --resume must not truncate the previous attempt's log — that is
+        # exactly the log a post-mortem needs. Mark a new session instead.
+        printf '\n=== new installer session: %s ===\n' \
+            "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo '?')" >> "${LOG_FILE}"
+    else
+        : > "${LOG_FILE}"
+    fi
     einfo "Logging to ${LOG_FILE}"
 }
