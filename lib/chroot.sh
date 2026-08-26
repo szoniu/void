@@ -127,6 +127,15 @@ copy_installer_to_chroot() {
     # Ensure scripts are executable
     chmod +x "${dest}/install.sh" "${dest}/configure.sh"
 
+    # Carry the staged LUKS keyfile into the chroot's /tmp; lib/luks.sh moves
+    # it onto the encrypted root and shreds this copy.
+    local luks_stage="${LUKS_KEYFILE_STAGE:-/tmp/void-installer-luks.key}"
+    if [[ -f "${luks_stage}" ]]; then
+        mkdir -p "${MOUNTPOINT}/tmp"
+        install -m 000 "${luks_stage}" "${MOUNTPOINT}${luks_stage}" 2>/dev/null \
+            || ewarn "Could not stage LUKS keyfile inside chroot"
+    fi
+
     # Carry the staged Wi-Fi keyfile into the chroot's /tmp so the networking
     # phase can install it (a Wi-Fi-only machine must boot online).
     local wifi_stage="${WIFI_PROFILE_STAGE:-/tmp/void-installer-wifi.nmconnection}"

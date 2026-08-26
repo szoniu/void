@@ -49,6 +49,7 @@ source "${LIB_DIR}/desktop.sh"
 source "${LIB_DIR}/swap.sh"
 source "${LIB_DIR}/umpc.sh"
 source "${LIB_DIR}/apple.sh"
+source "${LIB_DIR}/luks.sh"
 source "${LIB_DIR}/chroot.sh"
 source "${LIB_DIR}/hooks.sh"
 source "${LIB_DIR}/preset.sh"
@@ -294,6 +295,9 @@ _do_chroot_phases() {
         maybe_exec 'before_fstab'
         install_filesystem_tools
         generate_fstab
+        # crypttab + dracut + keyfile: after the kernel (dracut needs modules),
+        # before the bootloader (GRUB config reads the LUKS UUID).
+        luks_configure_system
         maybe_exec 'after_fstab'
         checkpoint_set "fstab"
     else

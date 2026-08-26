@@ -93,6 +93,14 @@ _configure_grub() {
         root_param="root=${ROOT_PARTITION}"
     fi
 
+    # LUKS: GRUB itself must open the container, because /boot lives on the
+    # encrypted root. Without GRUB_ENABLE_CRYPTODISK the firmware loads GRUB,
+    # GRUB finds no readable filesystem and drops to a rescue prompt.
+    local luks_params=""
+    if [[ "${LUKS_ENABLED:-no}" == "yes" ]] && declare -F luks_grub_cmdline >/dev/null; then
+        luks_params=$(luks_grub_cmdline) || true
+    fi
+
     # Filesystem-specific parameters. NOTE: rootflags=subvol= is deliberately
     # NOT set here — GRUB's 10_linux detects the mounted subvolume and injects
     # it itself, so hardcoding it puts the option on the cmdline twice. The
@@ -119,7 +127,7 @@ GRUB_TIMEOUT_STYLE=menu
 GRUB_DISTRIBUTOR="Void"
 
 GRUB_CMDLINE_LINUX_DEFAULT="${default_params}"
-GRUB_CMDLINE_LINUX="${extra_params}"
+GRUB_CMDLINE_LINUX="${extra_params}${luks_params:+${extra_params:+ }${luks_params}}"
 
 # Console settings
 GRUB_TERMINAL_INPUT="console"
@@ -127,6 +135,15 @@ GRUB_TERMINAL_OUTPUT="gfxterm"
 GRUB_GFXMODE="auto"
 GRUB_GFXPAYLOAD_LINUX="keep"
 GRUBEOF
+
+    if [[ "${LUKS_ENABLED:-no}" == "yes" ]]; then
+        cat >> "${grub_default}" << 'LUKSEOF'
+
+# Encrypted root: GRUB has to unlock the container to read /boot
+GRUB_ENABLE_CRYPTODISK=y
+LUKSEOF
+        einfo "GRUB configured for an encrypted root (cryptodisk enabled)"
+    fi
 
     # Dual-boot: enable os-prober
     if [[ "${WINDOWS_DETECTED:-0}" == "1" ]] || [[ "${LINUX_DETECTED:-0}" == "1" ]] || \

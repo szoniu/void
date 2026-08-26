@@ -6,6 +6,9 @@ source "${LIB_DIR}/protection.sh"
 # Action queue for two-phase disk operations
 declare -ga DISK_ACTIONS=()
 declare -ga DISK_STDIN=()
+# Parallel to DISK_STDIN: 1 marks a payload that must never be logged or
+# placed on a command line (LUKS passphrase).
+declare -ga DISK_SECRET=()
 
 # --- Phase 1: Planning ---
 
@@ -13,6 +16,7 @@ declare -ga DISK_STDIN=()
 disk_plan_reset() {
     DISK_ACTIONS=()
     DISK_STDIN=()
+    DISK_SECRET=()
 }
 
 # disk_plan_add — Add an action to the queue (no stdin)
@@ -24,6 +28,7 @@ disk_plan_add() {
     cmd=$(printf '%q ' "$@")
     DISK_ACTIONS+=("${desc}|||${cmd}")
     DISK_STDIN+=("")
+    DISK_SECRET+=("0")
 }
 
 # disk_plan_add_stdin — Add an action with stdin data
@@ -35,6 +40,22 @@ disk_plan_add_stdin() {
     cmd=$(printf '%q ' "$@")
     DISK_ACTIONS+=("${desc}|||${cmd}")
     DISK_STDIN+=("${stdin}")
+    DISK_SECRET+=("0")
+}
+
+# disk_plan_add_secret_stdin — Same, but the stdin payload is a secret.
+# Two things change for secrets: disk_plan_show masks the payload instead of
+# writing it to the log, and disk_execute_plan passes it through the
+# environment rather than interpolating it into a `bash -c` string (which
+# would expose a LUKS passphrase in `ps`).
+disk_plan_add_secret_stdin() {
+    local desc="$1" stdin="$2"
+    shift 2
+    local cmd
+    cmd=$(printf '%q ' "$@")
+    DISK_ACTIONS+=("${desc}|||${cmd}")
+    DISK_STDIN+=("${stdin}")
+    DISK_SECRET+=("1")
 }
 
 # disk_plan_show — Display planned actions
@@ -45,7 +66,11 @@ disk_plan_show() {
         local desc="${DISK_ACTIONS[$i]%%|||*}"
         einfo "  $((i + 1)). ${desc}"
         if [[ -n "${DISK_STDIN[$i]:-}" ]]; then
-            elog "    stdin script: ${DISK_STDIN[$i]}"
+            if [[ "${DISK_SECRET[$i]:-0}" == "1" ]]; then
+                elog "    stdin: (secret withheld)"
+            else
+                elog "    stdin script: ${DISK_STDIN[$i]}"
+            fi
         fi
     done
 }
@@ -95,6 +120,16 @@ disk_plan_auto() {
     fi
 
     ROOT_PARTITION="${part_prefix}${part_num}"
+
+    # LUKS: the partition itself becomes the container, and everything after
+    # this point (mkfs, mount, fstab) works on /dev/mapper/<name> instead.
+    if [[ "${LUKS_ENABLED:-no}" == "yes" ]]; then
+        LUKS_PARTITION="${ROOT_PARTITION}"
+        _plan_luks_setup "${LUKS_PARTITION}"
+        ROOT_PARTITION="/dev/mapper/${LUKS_NAME:-cryptroot}"
+        export LUKS_PARTITION
+    fi
+
     case "${fs}" in
         ext4)
             disk_plan_add "Format root as ext4" \
@@ -113,6 +148,135 @@ disk_plan_auto() {
     export ESP_PARTITION ROOT_PARTITION SWAP_PARTITION
 
     einfo "Auto-partition plan generated for ${disk}"
+}
+
+# --- LUKS helpers ---
+
+# luks_prompt_passphrase — Ask for the passphrase twice and verify.
+# Sets _LUKS_PASSPHRASE (a plain global, deliberately NOT in CONFIG_VARS:
+# config_save would write it to disk, and a passphrase in a file defeats the
+# point of encrypting the disk). A resumed run therefore asks again.
+luks_prompt_passphrase() {
+    local pass1 pass2
+
+    while true; do
+        pass1=$(dialog_passwordbox "LUKS Passphrase" \
+            "Enter the passphrase for the encrypted root partition.\n\n\
+You will type this at every boot. There is NO recovery if\n\
+you forget it — the data is gone.") || return 1
+
+        if [[ ${#pass1} -lt 8 ]]; then
+            dialog_msgbox "Passphrase Too Short" \
+                "Use at least 8 characters." || true
+            continue
+        fi
+
+        pass2=$(dialog_passwordbox "Confirm Passphrase" \
+            "Enter the same passphrase again:") || return 1
+
+        if [[ "${pass1}" == "${pass2}" ]]; then
+            break
+        fi
+
+        dialog_msgbox "Passphrases Differ" "The two entries did not match." || true
+    done
+
+    _LUKS_PASSPHRASE="${pass1}"
+    return 0
+}
+
+# _plan_luks_setup — Queue LUKS container creation + open.
+#
+# Two details that are easy to get wrong:
+#   - GRUB's LUKS2 support is limited (PBKDF2 only, not the default Argon2i),
+#     so the container is created as LUKS1. GRUB must read the container
+#     itself because /boot lives on the encrypted root.
+#   - The passphrase is fed through stdin (`--key-file -`), never as an
+#     argument, and the plan entry is marked secret so it stays out of the log.
+#
+# Idempotent for --resume: a partition that already holds a LUKS header is
+# only opened, never re-formatted — re-formatting would destroy the data that
+# resume is supposed to preserve.
+_plan_luks_setup() {
+    local part="$1"
+    local name="${LUKS_NAME:-cryptroot}"
+    local passphrase="${_LUKS_PASSPHRASE:-}"
+
+    if [[ "${DRY_RUN:-0}" == "1" ]]; then
+        disk_plan_add "Set up LUKS encryption on ${part}" \
+            bash -c "echo '[DRY-RUN] Would set up LUKS on ${part}'"
+        return 0
+    fi
+
+    if [[ -z "${passphrase}" ]]; then
+        # Reached when installing from a saved config (`--install`): the
+        # config never carries the passphrase, so ask for it now.
+        luks_prompt_passphrase || die "LUKS enabled but no passphrase given"
+        passphrase="${_LUKS_PASSPHRASE}"
+    fi
+
+    local current_type=""
+    current_type=$(blkid -s TYPE -o value "${part}" 2>/dev/null) || true
+
+    local fresh_container=1
+    if [[ "${current_type}" == "crypto_LUKS" ]]; then
+        einfo "${part} already holds a LUKS header — will open, not re-format"
+        fresh_container=0
+    else
+        disk_plan_add_secret_stdin "Set up LUKS encryption on ${part}" \
+            "${passphrase}" \
+            cryptsetup luksFormat --batch-mode --type luks1 --key-file - "${part}"
+    fi
+
+    disk_plan_add_secret_stdin "Open LUKS container as /dev/mapper/${name}" \
+        "${passphrase}" \
+        bash -c "if [ -b /dev/mapper/${name} ]; then echo 'already open'; else cryptsetup luksOpen --key-file - '${part}' '${name}'; fi"
+
+    # Second key slot holding a random keyfile, so the installed system asks
+    # for the passphrase once (GRUB) instead of twice (GRUB + initramfs).
+    # Only for a container we just created: re-running this on a resume would
+    # burn a new key slot on every attempt.
+    if [[ ${fresh_container} -eq 1 ]]; then
+        local keyfile="${LUKS_KEYFILE_STAGE:-/tmp/void-installer-luks.key}"
+        disk_plan_add_secret_stdin "Add initramfs keyfile to the LUKS container" \
+            "${passphrase}" \
+            bash -c "umask 077 && dd if=/dev/urandom of='${keyfile}' bs=512 count=8 status=none && chmod 000 '${keyfile}' && cryptsetup luksAddKey --key-file - '${part}' '${keyfile}'"
+    fi
+}
+
+# luks_open_for_resume — Open the LUKS container outside the planning path.
+# Used by --resume and by the early mount in tui/progress.sh, where the disk
+# plan never runs but the filesystem still has to be reachable.
+luks_open_for_resume() {
+    local part="${LUKS_PARTITION:-}"
+    local name="${LUKS_NAME:-cryptroot}"
+
+    [[ "${LUKS_ENABLED:-no}" == "yes" ]] || return 0
+    [[ -b "${part}" ]] || return 1
+    [[ -b "/dev/mapper/${name}" ]] && return 0
+
+    local passphrase="${_LUKS_PASSPHRASE:-}"
+    if [[ -z "${passphrase}" ]]; then
+        # A resumed run has no passphrase in memory — the config deliberately
+        # never stores it. Ask again rather than failing silently.
+        passphrase=$(dialog_passwordbox "LUKS Passphrase" \
+            "Enter the passphrase for the encrypted partition\n${part}:") || return 1
+    fi
+
+    _VOID_SECRET_STDIN="${passphrase}" \
+        bash -c 'printf "%s" "${_VOID_SECRET_STDIN}" | cryptsetup luksOpen --key-file - "$1" "$2"' \
+        -- "${part}" "${name}" || return 1
+
+    einfo "Opened LUKS container ${part} as /dev/mapper/${name}"
+    return 0
+}
+
+# luks_close — Close the container (used when unmounting the target).
+luks_close() {
+    local name="${LUKS_NAME:-cryptroot}"
+    [[ -b "/dev/mapper/${name}" ]] || return 0
+    cryptsetup luksClose "${name}" 2>/dev/null \
+        || ewarn "Could not close LUKS container ${name}"
 }
 
 # --- Shrink helpers ---
@@ -344,6 +508,15 @@ disk_plan_dualboot() {
         # sfdisk --append assigned a different number than predicted here.
     fi
 
+    # LUKS goes between partitioning and mkfs here too: the filesystem is
+    # created inside the container, not on the bare partition.
+    if [[ "${LUKS_ENABLED:-no}" == "yes" ]]; then
+        LUKS_PARTITION="${ROOT_PARTITION}"
+        _plan_luks_setup "${LUKS_PARTITION}"
+        ROOT_PARTITION="/dev/mapper/${LUKS_NAME:-cryptroot}"
+        export LUKS_PARTITION
+    fi
+
     # Format root
     case "${fs}" in
         ext4)
@@ -396,12 +569,13 @@ cleanup_target_disk() {
     done
 
     # Close LUKS containers backed by this disk
-    if command -v cryptsetup &>/dev/null && [[ -b /dev/mapper/cryptroot ]]; then
+    local _luks_name="${LUKS_NAME:-cryptroot}"
+    if command -v cryptsetup &>/dev/null && [[ -b "/dev/mapper/${_luks_name}" ]]; then
         local backing
-        backing=$(cryptsetup status cryptroot 2>/dev/null | awk '/device:/ {print $2}') || true
+        backing=$(cryptsetup status "${_luks_name}" 2>/dev/null | awk '/device:/ {print $2}') || true
         if [[ "${backing}" == "${disk}"* ]]; then
-            ewarn "Closing LUKS on cryptroot"
-            cryptsetup close cryptroot 2>/dev/null || true
+            ewarn "Closing LUKS on ${_luks_name}"
+            cryptsetup close "${_luks_name}" 2>/dev/null || true
         fi
     fi
 
@@ -437,7 +611,15 @@ disk_execute_plan() {
         einfo "[$((i + 1))/${#DISK_ACTIONS[@]}] ${desc}"
 
         if [[ -n "${stdin_data}" ]]; then
-            try "${desc}" bash -c "printf '%s' $(printf '%q' "${stdin_data}") | ${cmd}"
+            if [[ "${DISK_SECRET[$i]:-0}" == "1" ]]; then
+                # Secret payload (LUKS passphrase): goes through the
+                # environment, never the command line — `ps` shows argv to
+                # every user, /proc/PID/environ only to root.
+                _VOID_SECRET_STDIN="${stdin_data}" \
+                    try "${desc}" bash -c 'printf "%s" "${_VOID_SECRET_STDIN}" | '"${cmd}"
+            else
+                try "${desc}" bash -c "printf '%s' $(printf '%q' "${stdin_data}") | ${cmd}"
+            fi
         else
             try "${desc}" bash -c "${cmd}"
         fi
@@ -599,6 +781,12 @@ unmount_filesystems() {
     for mnt in "${mounts[@]}"; do
         umount -l "${mnt}" 2>/dev/null || true
     done
+
+    # Close the LUKS container last — it can only go once nothing is mounted
+    # on top of it.
+    if [[ "${LUKS_ENABLED:-no}" == "yes" ]]; then
+        luks_close
+    fi
 
     einfo "Filesystems unmounted"
 }

@@ -37,6 +37,7 @@ lib/                    — Library modules (NEVER execute directly)
 ├── desktop.sh          — desktop_install (GPU drivers, KDE Plasma, SDDM, elogind, PipeWire, KDE apps), install_hyprland_ecosystem, install_noctalia_shell
 ├── swap.sh             — swap_setup (zramen, partition, swap file)
 ├── chroot.sh           — chroot_setup/teardown/exec, copy_dns_info, copy_installer_to_chroot
+├── luks.sh             — luks_configure_system (crypttab, dracut+keyfile, cryptsetup), luks_grub_cmdline
 ├── apple.sh            — detect_apple (DMI), detect_macos_partitions (APFS/HFS+ po GPT GUID), apple_write_early_quirks (applespi→initramfs, hid fnmode), apple_apply_quirks (broadcom-bt-firmware, notatki)
 ├── hooks.sh            — maybe_exec 'before_X' / 'after_X'
 └── preset.sh           — preset_export/import (hardware overlay)
@@ -149,6 +150,8 @@ All config variables are defined in `CONFIG_VARS[]` in `lib/constants.sh`:
 | `SHRINK_PARTITION` | /dev/sdXN | Partition to shrink (dual-boot) |
 | `SHRINK_PARTITION_FSTYPE` | ntfs/ext4/btrfs | Filesystem of partition to shrink |
 | `SHRINK_NEW_SIZE_MIB` | integer | New size after shrink (MiB) |
+| `LUKS_ENABLED` | yes/no | Encrypt the root partition with LUKS |
+| `LUKS_PARTITION` | /dev/sdXN | Raw partition holding the LUKS container (root is then /dev/mapper/cryptroot) |
 | `ENABLE_HYPRLAND` | yes/no | Install Hyprland ecosystem (standalone, niezależny od Noctalia) |
 | `ENABLE_NIRI` | yes/no | Install niri ecosystem (niri + xwayland-satellite + Waybar/fuzzel/mako) |
 | `APPLE_DETECTED` | 0/1 | Apple hardware detected (DMI `Apple Inc.`) |
@@ -258,6 +261,35 @@ Detal i przepis instalacji: **`docs/macbook-apple.md`**. W skrócie, co robi kod
   `hid_apple fnmode=2`.
 - Ekran Secure Boot pomijany (Intel Mac bez T2 nie ma UEFI Secure Boot).
 - Checkpoint `apple_quirks` (po `umpc_quirks`): `broadcom-bt-firmware` + `POST-INSTALL-APPLE.txt`.
+
+#### LUKS (szyfrowanie roota)
+
+Kontener tworzy `lib/disk.sh` (proces zewnętrzny — tam żyje hasło), a system
+docelowy okablowuje `lib/luks.sh` (faza chroot, po kernelu a przed bootloaderem).
+
+- **LUKS1, nie LUKS2** — GRUB obsługuje LUKS2 tylko z PBKDF2, nie z domyślnym
+  Argon2i, a `/boot` leży na zaszyfrowanym roocie, więc GRUB **musi** otworzyć
+  kontener. Stąd też `GRUB_ENABLE_CRYPTODISK=y`.
+- **Hasło nigdy w argv ani w logu.** `disk_plan_add_secret_stdin()` oznacza wpis
+  planu jako sekret: `disk_plan_show` pisze „(secret withheld)", a
+  `disk_execute_plan` podaje hasło przez **zmienną środowiskową**, nie przez
+  interpolację do `bash -c` (argv widzi każdy user, `/proc/PID/environ` tylko root).
+  `cryptsetup ... --key-file -` czyta je ze stdin.
+- **Hasła NIE ma w `CONFIG_VARS`** — `config_save` zapisałby je na dysk, co
+  przekreśla sens szyfrowania. Skutek: `--resume` i `--install` z presetu pytają
+  o nie ponownie (`luks_prompt_passphrase`).
+- **Idempotencja pod resume:** gdy `blkid` widzi `crypto_LUKS`, plan tylko otwiera
+  kontener — żadnego `luksFormat` (skasowałby dane) i żadnego `luksAddKey`
+  (paliłby nowy slot przy każdej próbie).
+- **Keyfile w initramfs** usuwa drugie pytanie o hasło (GRUB pyta, żeby odczytać
+  `/boot`, initramfs pytałby ponownie o roota). Jest bezpieczny **tylko** dlatego,
+  że initramfs leży na zaszyfrowanym roocie — `_luks_keyfile_is_safe()` odmawia,
+  gdy `BOOT_PARTITION` jest ustawione (osobny, niezaszyfrowany `/boot`).
+- **Kolejność w planie jest krytyczna:** `luksFormat` → `luksOpen` → `mkfs`.
+  mkfs przed otwarciem kontenera nadpisałby nagłówek LUKS.
+- **Klawiatura w initramfs.** Prompt na hasło leci z initramfs — na MacBookach
+  z klawiaturą SPI działa tylko dzięki `force_drivers` z `lib/apple.sh`.
+  Tryb `manual` nie jest wspierany (`validate_config` to blokuje).
 
 #### Wi-Fi na live medium (issue #11)
 
@@ -472,10 +504,11 @@ bash tests/test_validate.sh      # validate_config() — pre-install safety gate
 bash tests/test_shrink.sh        # Shrink planning + safety gate (destructive path)
 bash tests/test_apple.sh         # Apple/macOS detection + GPT GUID + config plumbing
 bash tests/test_phase_order.sh   # Structural guards: phase order, resume, rootflags, package names
+bash tests/test_luks.sh          # LUKS planning, secret handling, validation gates
 bash tests/shellcheck.sh         # Static analysis / lint (needs shellcheck)
 ```
 
-All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 11 functional files (312 assertions) + `shellcheck.sh` (lints all 57 `.sh` files; needs `shellcheck` installed).
+All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 12 functional files (343 assertions) + `shellcheck.sh` (lints all 59 `.sh` files; needs `shellcheck` installed).
 
 ## Known patterns and pitfalls
 

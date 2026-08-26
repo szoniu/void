@@ -173,6 +173,22 @@ validate_config() {
         errors+=("ENABLE_SECUREBOOT=yes requires ESP_PARTITION to be set")
     fi
 
+    if [[ "${LUKS_ENABLED:-no}" != "no" && "${LUKS_ENABLED:-no}" != "yes" ]]; then
+        errors+=("LUKS_ENABLED='${LUKS_ENABLED}' — must be yes or no")
+    fi
+
+    if [[ "${LUKS_ENABLED:-no}" == "yes" ]]; then
+        # ROOT_PARTITION is the mapper device once LUKS is planned; the raw
+        # partition must still be recorded, otherwise crypttab and the GRUB
+        # cmdline have no UUID to point at.
+        if [[ -z "${LUKS_PARTITION:-}" ]] && [[ "${PARTITION_SCHEME:-}" != "manual" ]]; then
+            errors+=("LUKS_ENABLED=yes but LUKS_PARTITION is empty")
+        fi
+        if [[ "${PARTITION_SCHEME:-}" == "manual" ]]; then
+            errors+=("LUKS is not supported with manual partitioning — set up the container yourself and choose 'no'")
+        fi
+    fi
+
     if [[ -n "${DESKTOP_TYPE:-}" ]] && \
        [[ "${DESKTOP_TYPE}" != "kde" && "${DESKTOP_TYPE}" != "gnome" ]]; then
         errors+=("DESKTOP_TYPE='${DESKTOP_TYPE}' — must be kde or gnome")

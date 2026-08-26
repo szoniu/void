@@ -108,6 +108,22 @@ w GTK/Electronach nie pojawiają się wcale.
 i5-7Y54 w MacBooku 12" nie ma wentylatora — throttling pod obciążeniem to norma, nie
 usterka. `applesmc` ładuje się do odczytu temperatur.
 
+## LUKS na MacBooku — o czym pamiętać
+
+Szyfrowanie roota działa na tym sprzęcie, ale zależy od jednej rzeczy: **prompt na
+hasło leci z initramfs**, zanim wstanie jakikolwiek desktop. Klawiatura MacBooka
+wisi na SPI, więc bez `applespi` w initramfs nie masz czym wpisać hasła — i system
+staje w miejscu, którego nie da się obejść inaczej niż klawiaturą USB.
+
+Instalator wrzuca `applespi`, `spi_pxa2xx_platform` i `intel_lpss_pci` do
+`force_drivers` dracuta niezależnie od LUKS-a, więc jest to załatwione — ale przy
+pierwszym starcie po instalacji **miej pod ręką hub USB-C i klawiaturę**. Jeśli
+prompt się pojawi, a klawiatura nie odpowiada: podłącz USB, wpisz hasło, a po
+zalogowaniu sprawdź `lsinitrd /boot/initramfs-*.img | grep applespi`.
+
+Hasło podajesz **raz** (GRUB) — drugie pytanie z initramfs znika dzięki keyfile'owi,
+który leży na zaszyfrowanym roocie.
+
 ## Kolejność przy dual-boocie z macOS
 
 1. macOS: Time Machine.
