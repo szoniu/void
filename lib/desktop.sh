@@ -118,11 +118,19 @@ _install_intel_drivers() {
 _install_kde_plasma() {
     einfo "Installing KDE Plasma desktop..."
 
-    # Core KDE Plasma + Xorg (SDDM requires X server for display greeter)
+    # Plasma itself only needs Xwayland (plasma-workspace depends on
+    # xorg-server-xwayland, not on the full xorg-server), and SDDM pulls in
+    # nothing X-related on its own — so a Wayland-only KDE really does end up
+    # without xorg-server on disk.
+    local -a x_pkgs=(xorg-minimal)
+    if [[ "${WAYLAND_ONLY:-no}" == "yes" ]]; then
+        x_pkgs=(xorg-server-xwayland)
+    fi
+
     try "Installing KDE Plasma" xbps-install -y \
         kde5 \
         kde5-baseapps \
-        xorg-minimal \
+        "${x_pkgs[@]}" \
         sddm \
         elogind \
         dbus
@@ -151,6 +159,21 @@ Current=breeze
 [General]
 InputMethod=
 SDDMEOF
+
+    if [[ "${WAYLAND_ONLY:-no}" == "yes" ]]; then
+        # SDDM defaults to an X11 greeter; without this it would start
+        # xorg-server at boot — which is exactly what Wayland-only avoids.
+        # kwin_wayland is the compositor Plasma already ships, so no weston.
+        cat > /etc/sddm.conf.d/10-wayland.conf << 'SDDMWLEOF'
+[General]
+DisplayServer=wayland
+GreeterEnvironment=QT_WAYLAND_SHELL_INTEGRATION=layer-shell
+
+[Wayland]
+CompositorCommand=kwin_wayland --drm --no-lockscreen --no-global-shortcuts --locale1
+SDDMWLEOF
+        einfo "  SDDM configured for a Wayland greeter"
+    fi
 
     # PipeWire autostart config
     mkdir -p /etc/pipewire
@@ -232,13 +255,28 @@ PLEOF
 _install_gnome_desktop() {
     einfo "Installing GNOME desktop..."
 
-    # Core GNOME + Xorg + GDM
-    try "Installing GNOME" xbps-install -y \
-        gnome \
-        xorg-minimal \
-        gdm \
-        elogind \
-        dbus
+    # GDM in Void depends on the full xorg-server (not just Xwayland), so a
+    # Wayland-only GNOME cannot use it — the package would drag Xorg back in
+    # no matter what else we leave out. greetd + tuigreet is the replacement:
+    # a console greeter that launches the Wayland session directly. GNOME's
+    # own components (gnome-shell, gnome-session, mutter) have no xorg-server
+    # dependency, so this really does produce a system without it.
+    if [[ "${WAYLAND_ONLY:-no}" == "yes" ]]; then
+        try "Installing GNOME (Wayland-only)" xbps-install -y \
+            gnome \
+            xorg-server-xwayland \
+            greetd \
+            tuigreet \
+            elogind \
+            dbus
+    else
+        try "Installing GNOME" xbps-install -y \
+            gnome \
+            xorg-minimal \
+            gdm \
+            elogind \
+            dbus
+    fi
 
     # PipeWire audio
     try "Installing PipeWire" xbps-install -y \
@@ -249,10 +287,15 @@ _install_gnome_desktop() {
 
     # Enable services
     _enable_service "dbus"
-    _enable_service "gdm"
+    if [[ "${WAYLAND_ONLY:-no}" == "yes" ]]; then
+        _configure_greetd "gnome-wayland"
+        _enable_service "greetd"
+    else
+        _enable_service "gdm"
+    fi
     _enable_service "elogind"
 
-    # Disable conflicting services (GDM manages its own tty)
+    # Disable conflicting services (the display manager owns its own tty)
     rm -f /var/service/agetty-tty7 2>/dev/null || true
 
     # PipeWire autostart config
@@ -1221,4 +1264,114 @@ EOF
     fi
 
     einfo "  niri config written to /etc/skel/.config/niri/config.kdl (scale ${scale})"
+}
+
+# _greetd_session_command — Map a session name to the command that starts it.
+# gnome-session needs its wrapper; standalone compositors are their own binary
+# (niri ships niri-session, which sets up the D-Bus/systemd-less environment).
+_greetd_session_command() {
+    case "${1:-}" in
+        gnome-wayland|gnome) echo "gnome-session" ;;
+        niri)                echo "niri-session" ;;
+        sway)                echo "sway" ;;
+        plasma|kde)          echo "startplasma-wayland" ;;
+        *)                   echo "${1:-gnome-session}" ;;
+    esac
+}
+
+# _configure_greetd — Point greetd at tuigreet and the chosen Wayland session.
+# Args: default session command (e.g. "gnome-wayland", "niri", "sway")
+#
+# greetd is the Wayland-only alternative to GDM/SDDM: it has no X dependency
+# at all, runs the greeter on a plain TTY, and execs the session directly.
+# tuigreet is the text UI on top of it (both are in the official Void repo).
+_configure_greetd() {
+    local session="${1:-gnome-wayland}"
+
+    local session_cmd
+    session_cmd=$(_greetd_session_command "${session}")
+
+    mkdir -p /etc/greetd
+
+    # --remember keeps the last user; --time shows a clock. The session list
+    # is read from /usr/share/wayland-sessions, so anything else the user
+    # installs later (niri, sway) shows up without touching this file.
+    cat > /etc/greetd/config.toml << GREETDCONF
+# greetd — written by ${INSTALLER_NAME:-void-installer}
+# Wayland-only session management: no X server anywhere in the chain.
+
+[terminal]
+vt = 7
+
+[default_session]
+command = "tuigreet --time --remember --sessions /usr/share/wayland-sessions --cmd ${session_cmd}"
+user = "_greeter"
+GREETDCONF
+
+    chmod 644 /etc/greetd/config.toml
+
+    einfo "  greetd configured (tuigreet, default session: ${session_cmd})"
+}
+
+# verify_wayland_only — Report whether xorg-server actually stayed off the
+# system. A package chosen on the extras screen can still pull it in, and a
+# silent "Wayland-only" that shipped Xorg anyway would be a lie.
+verify_wayland_only() {
+    [[ "${WAYLAND_ONLY:-no}" == "yes" ]] || return 0
+
+    if xbps-query xorg-server &>/dev/null; then
+        ewarn "Wayland-only was requested, but xorg-server IS installed."
+        ewarn "Something pulled it in as a dependency. Find out what with:"
+        ewarn "  xbps-query -X xorg-server"
+        _wayland_only_note "installed"
+    else
+        einfo "Wayland-only verified: xorg-server is not installed"
+        _wayland_only_note "clean"
+    fi
+}
+
+# _wayland_only_note — Post-install notes for the Wayland-only setup.
+_wayland_only_note() {
+    local state="$1"
+    local note="/root/POST-INSTALL-WAYLAND.txt"
+
+    {
+        echo "Wayland-only installation"
+        echo "========================="
+        echo ""
+        if [[ "${state}" == "clean" ]]; then
+            echo "xorg-server is NOT installed. X11 applications still run,"
+            echo "through Xwayland (xorg-server-xwayland)."
+        else
+            echo "NOTE: xorg-server ended up installed after all — some package"
+            echo "pulled it in. Check with:  xbps-query -X xorg-server"
+        fi
+        echo ""
+        if [[ "${DESKTOP_TYPE:-kde}" == "gnome" ]]; then
+            cat << 'EOF'
+Login manager: greetd + tuigreet (GDM is not used).
+GDM in Void depends on the full xorg-server, which is why it was replaced.
+
+  Config:   /etc/greetd/config.toml
+  Service:  ln -sf /etc/sv/greetd /var/service/greetd
+
+To go back to GDM later:
+  xbps-install -y gdm            # this also installs xorg-server
+  rm /var/service/greetd
+  ln -sf /etc/sv/gdm /var/service/gdm
+EOF
+        else
+            cat << 'EOF'
+Login manager: SDDM with a Wayland greeter (kwin_wayland as compositor).
+
+  Config:   /etc/sddm.conf.d/10-wayland.conf
+
+If the greeter fails to start, delete that file and reboot — SDDM falls
+back to X11, but you then need the full xorg-server:
+  xbps-install -y xorg-minimal
+EOF
+        fi
+    } > "${note}"
+
+    einfo "  Notes written to ${note}"
 }

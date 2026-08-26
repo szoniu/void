@@ -62,10 +62,18 @@ screen_summary() {
     summary+="\n"
     summary+="Username:     ${USERNAME:-user}\n"
     if [[ "${DESKTOP_TYPE:-kde}" == "gnome" ]]; then
-        summary+="Desktop:      GNOME + GDM + PipeWire\n"
+        if [[ "${WAYLAND_ONLY:-no}" == "yes" ]]; then
+            summary+="Desktop:      GNOME + greetd (Wayland-only) + PipeWire\n"
+        else
+            summary+="Desktop:      GNOME + GDM + PipeWire\n"
+        fi
         [[ -n "${DESKTOP_EXTRAS:-}" ]] && summary+="GNOME apps:   ${DESKTOP_EXTRAS}\n"
     else
-        summary+="Desktop:      KDE Plasma + SDDM + PipeWire\n"
+        if [[ "${WAYLAND_ONLY:-no}" == "yes" ]]; then
+            summary+="Desktop:      KDE Plasma + SDDM (Wayland-only) + PipeWire\n"
+        else
+            summary+="Desktop:      KDE Plasma + SDDM + PipeWire\n"
+        fi
         [[ -n "${DESKTOP_EXTRAS:-}" ]] && summary+="KDE apps:     ${DESKTOP_EXTRAS}\n"
     fi
     [[ -n "${EXTRA_PACKAGES:-}" ]] && summary+="Extra pkgs:   ${EXTRA_PACKAGES}\n"

@@ -106,6 +106,7 @@ All config variables are defined in `CONFIG_VARS[]` in `lib/constants.sh`:
 | `KEYMAP` | keymap name | e.g. `us`, `pl` |
 | `KERNEL_TYPE` | mainline/lts/surface-patched | Kernel flavor (surface-patched compiles from source with linux-surface patches) |
 | `DESKTOP_TYPE` | kde/... | Desktop environment (set in `tui/desktop_select.sh`) |
+| `WAYLAND_ONLY` | yes/no | Install without xorg-server (Xwayland only) |
 | `GPU_VENDOR` | nvidia/amd/intel/none/unknown | Detected or selected GPU |
 | `GPU_DEVICE_ID` | PCI id | Detected GPU PCI device id |
 | `GPU_DEVICE_NAME` | string | Detected GPU model name |
@@ -261,6 +262,32 @@ Detal i przepis instalacji: **`docs/macbook-apple.md`**. W skrócie, co robi kod
   `hid_apple fnmode=2`.
 - Ekran Secure Boot pomijany (Intel Mac bez T2 nie ma UEFI Secure Boot).
 - Checkpoint `apple_quirks` (po `umpc_quirks`): `broadcom-bt-firmware` + `POST-INSTALL-APPLE.txt`.
+
+#### Wayland-only (issue #16)
+
+`WAYLAND_ONLY=yes` ma znaczyć „na dysku nie ma `xorg-server`" — a to zależy od
+**display managera**, nie od samego środowiska. Zweryfikowane w `void-packages`:
+
+| Pakiet | Zależność od Xorg |
+|---|---|
+| `plasma-workspace` | tylko `xorg-server-xwayland` |
+| `sddm` | `depends="dbus"` — zero X |
+| `gnome-core`/`gnome-shell`/`gnome-session`/`mutter` | brak |
+| **`gdm`** | **`xorg-server`** (twarda) |
+| `xwayland-satellite` | `xorg-server-xwayland` |
+
+Stąd dwie różne ścieżki:
+
+- **KDE** — `xorg-minimal` → `xorg-server-xwayland`, a greeter SDDM przełączany na
+  Wayland (`/etc/sddm.conf.d/10-wayland.conf`, `CompositorCommand=kwin_wayland`).
+  Bez tego SDDM wystartowałby X-owy greeter i wciągnął `xorg-server` mimo wszystko.
+- **GNOME** — GDM **musi** zniknąć, bo sam ciągnie `xorg-server`. Zastępuje go
+  `greetd` + `tuigreet` (oba w oficjalnym repo, `vsv greetd` daje serwis runit,
+  greeter chodzi jako `_greeter`). GNOME na Wayland działa bez GDM.
+
+`verify_wayland_only()` po fazie extras sprawdza `xbps-query xorg-server` i mówi
+wprost, gdy coś jednak go wciągnęło (`xbps-query -X xorg-server` wskaże co) —
+cicha obietnica „bez Xorg", która i tak dowiozła Xorg, byłaby gorsza niż brak opcji.
 
 #### LUKS (szyfrowanie roota)
 
@@ -505,10 +532,11 @@ bash tests/test_shrink.sh        # Shrink planning + safety gate (destructive pa
 bash tests/test_apple.sh         # Apple/macOS detection + GPT GUID + config plumbing
 bash tests/test_phase_order.sh   # Structural guards: phase order, resume, rootflags, package names
 bash tests/test_luks.sh          # LUKS planning, secret handling, validation gates
+bash tests/test_wayland.sh       # Wayland-only: package swaps, greetd, verification
 bash tests/shellcheck.sh         # Static analysis / lint (needs shellcheck)
 ```
 
-All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 12 functional files (343 assertions) + `shellcheck.sh` (lints all 59 `.sh` files; needs `shellcheck` installed).
+All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 13 functional files (367 assertions) + `shellcheck.sh` (lints all 60 `.sh` files; needs `shellcheck` installed).
 
 ## Known patterns and pitfalls
 

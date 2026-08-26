@@ -173,6 +173,10 @@ validate_config() {
         errors+=("ENABLE_SECUREBOOT=yes requires ESP_PARTITION to be set")
     fi
 
+    if [[ "${WAYLAND_ONLY:-no}" != "no" && "${WAYLAND_ONLY:-no}" != "yes" ]]; then
+        errors+=("WAYLAND_ONLY='${WAYLAND_ONLY}' — must be yes or no")
+    fi
+
     if [[ "${LUKS_ENABLED:-no}" != "no" && "${LUKS_ENABLED:-no}" != "yes" ]]; then
         errors+=("LUKS_ENABLED='${LUKS_ENABLED}' — must be yes or no")
     fi

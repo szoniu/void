@@ -14,6 +14,7 @@ Rdzeń jest dojrzały i na parytecie z działającym instalatorem Gentoo. Pełny
 - ✅ **`--resume` nie formatuje dysku, na którym już jest system** — brak checkpointu `disks` nie znaczy „pusty dysk"; sonda read-only (`_resume_target_has_system`) blokuje destrukcyjny plan.
 - ✅ **Konta zakładane PRZED kernelem i desktopem** — awaria długiej fazy nie zostawia już systemu, do którego nie da się zalogować.
 - ✅ **Wi-Fi w instalatorze** (ekran 4) — wpa_supplicant/dhcpcd albo NetworkManager, zależnie od tego, co jest na live medium. Sieć trafia też do zainstalowanego systemu.
+- ✅ **Tryb Wayland-only** — instalacja bez `xorg-server` (zostaje Xwayland dla apek X11). Na KDE greeter SDDM przełączany na Wayland; na GNOME GDM zastępowany przez greetd+tuigreet, bo sam GDM ciągnie Xorg.
 - ✅ **Szyfrowanie dysku (LUKS)** — kontener LUKS1 na partycji root, GRUB z `cryptodisk`, keyfile w initramfs (jedno pytanie o hasło zamiast dwóch). Hasło nigdy nie trafia do configu, logu ani do `ps`.
 - ✅ **Intel Maki (pre-T2)** — GRUB na ścieżce removable, applespi w initramfs, wykrywanie macOS/APFS. T2 (2018+) jawnie niewspierane.
 
@@ -182,7 +183,7 @@ Logi instalacji zostają na dysku: `/var/log/void-installer.log` (faza chroot),
 | 10 | Kernel | mainline (rolling) / LTS (stabilny) / surface-patched (kompilowany ze źródeł, na Surface) |
 | 11 | Secure Boot | Opcjonalne podpisanie kernela i GRUB-a (MOK/shim). Tylko na EFI. |
 | 12 | GPU | Auto-wykryty sterownik + hybrid GPU (PRIME offload) + NVIDIA open |
-| 13 | Desktop | KDE/GNOME + wybór aplikacji (Firefox, Thunderbird, Kate...) |
+| 13 | Desktop | KDE/GNOME + tryb **Wayland-only** (bez xorg-server) + wybór aplikacji |
 | 14 | Użytkownicy | Hasło root, konto użytkownika, grupy |
 | 15 | Pakiety | Dodatkowe pakiety + wykryte peryferiale (Bluetooth, fingerprint, Thunderbolt, IIO sensors, webcam, WWAN) + ASUS ROG/TUF tools + Surface tools (iptsd) + **niri** + Hyprland + Noctalia Shell |
 | 16 | Preset save | Opcjonalny eksport konfiguracji na przyszłość |
@@ -210,6 +211,29 @@ Oprócz KDE Plasma i GNOME, installer oferuje opcjonalne środowiska Wayland (ek
 - **Noctalia Shell** — Wayland shell oparty na Quickshell, z wyborem kompozytora: **Hyprland**, **niri** lub **sway**. Sam shell nie jest pakietowany dla Void (dawne `noctalia-void-repo` jest martwe) — instalator kładzie kompozytor i `quickshell`, a instrukcję dokończenia zostawia w `/root/POST-INSTALL-NOCTALIA.txt`.
 
 Opcje są niezależne od siebie i od KDE/GNOME.
+
+## Tryb Wayland-only
+
+Pytanie pojawia się na ekranie 13, po wyborze środowiska. Chodzi o to, żeby na
+dysku **nie było `xorg-server`** — aplikacje X11 nadal działają, przez Xwayland.
+
+Co się realnie dzieje, zależy od środowiska:
+
+| | Bez trybu | Wayland-only |
+|---|---|---|
+| **KDE** | `xorg-minimal` + SDDM na X11 | `xorg-server-xwayland` + SDDM na Wayland (`kwin_wayland`) |
+| **GNOME** | `xorg-minimal` + GDM | `xorg-server-xwayland` + **greetd + tuigreet** |
+
+GDM znika nie z kaprysu: w Void `gdm` ma twardą zależność od `xorg-server`, więc
+przy nim tryb byłby fikcją. Sama Plasma i sam GNOME potrzebują wyłącznie Xwaylanda.
+
+Po instalacji installer **sprawdza**, czy `xorg-server` faktycznie nie wszedł — jeśli
+wciągnął go jakiś wybrany pakiet, powie o tym i podpowie `xbps-query -X xorg-server`.
+Instrukcja powrotu do X11 ląduje w `/root/POST-INSTALL-WAYLAND.txt`.
+
+> Powiedz „nie", jeśli korzystasz z narzędzi działających tylko na X11 — części
+> rozwiązań do zdalnego pulpitu, automatyzacji (`xdotool`) czy starszych aplikacji
+> do udostępniania ekranu.
 
 ## Szyfrowanie dysku (LUKS)
 
