@@ -25,7 +25,25 @@ install_network_manager() {
     try "Enabling dbus service" ln -sf /etc/sv/dbus /var/service/dbus
     try "Enabling NetworkManager service" ln -sf /etc/sv/NetworkManager /var/service/NetworkManager
 
+    _install_staged_wifi_profile
+
     einfo "NetworkManager installed and enabled"
+}
+
+# _install_staged_wifi_profile — Carry the Wi-Fi network used during install
+# over to the installed system. The keyfile is written by tui/wifi_config.sh
+# and copied into the chroot with the installer; it holds only the derived
+# PSK, never the typed passphrase.
+_install_staged_wifi_profile() {
+    local staged="${WIFI_PROFILE_STAGE:-/tmp/void-installer-wifi.nmconnection}"
+    [[ -f "${staged}" ]] || return 0
+
+    mkdir -p /etc/NetworkManager/system-connections
+    if install -m 600 "${staged}" /etc/NetworkManager/system-connections/ 2>/dev/null; then
+        einfo "Wi-Fi profile installed for NetworkManager (first boot comes up online)"
+    else
+        ewarn "Could not install the staged Wi-Fi profile"
+    fi
 }
 
 # select_fastest_mirror — Test mirrors and select the fastest one

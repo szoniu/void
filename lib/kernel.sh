@@ -8,6 +8,12 @@ kernel_install() {
 
     einfo "Installing kernel (${kernel_type})..."
 
+    # Apple SPI keyboard/touchpad modules must be configured before the
+    # initramfs is built, otherwise early boot has no input device at all.
+    if declare -F apple_write_early_quirks >/dev/null; then
+        apple_write_early_quirks
+    fi
+
     case "${kernel_type}" in
         mainline|lts)
             _kernel_install_standard "${kernel_type}"

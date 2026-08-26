@@ -362,26 +362,70 @@ _install_bluetooth() {
     einfo "Bluetooth support installed"
 }
 
-# install_hyprland_ecosystem — Hyprland + waybar, wofi, mako, grim, slurp, wl-clipboard, brightnessctl
+# install_hyprland_ecosystem — Hyprland + Waybar, wofi, mako, grim, slurp, ...
+#
+# Void does NOT ship Hyprland: void-packages has hyprutils/hyprwayland-scanner
+# (dependencies) but no Hyprland, hyprpaper, hypridle or hyprlock. The whole
+# compositor stack has to come from a third-party repo. Note the package name
+# is `Waybar`, capital W — `waybar` silently resolves to nothing.
 install_hyprland_ecosystem() {
     if [[ "${ENABLE_HYPRLAND:-no}" != "yes" ]]; then
         return 0
     fi
     einfo "Installing Hyprland ecosystem..."
 
-    # Per-package install with fallback — one missing package doesn't block the rest
-    local -a hypr_pkgs=(
-        Hyprland hyprpaper hypridle hyprlock
-        waybar wofi mako grim slurp wl-clipboard brightnessctl
-        xdg-desktop-portal-hyprland
+    _setup_hyprland_repo
+
+    # Packages that only exist in the third-party repo
+    local -a hypr_third_party=(
+        Hyprland hyprpaper hypridle hyprlock xdg-desktop-portal-hyprland
+    )
+    # Packages from official Void repos
+    local -a hypr_official=(
+        Waybar wofi mako grim slurp wl-clipboard brightnessctl
     )
 
     local pkg
-    for pkg in "${hypr_pkgs[@]}"; do
+    for pkg in "${hypr_third_party[@]}" "${hypr_official[@]}"; do
         xbps-install -y "${pkg}" 2>/dev/null || ewarn "Package '${pkg}' not available, skipping"
     done
 
+    if ! command -v Hyprland >/dev/null 2>&1 && ! [[ -x /usr/bin/Hyprland ]]; then
+        ewarn "Hyprland itself did not install — the third-party repo may be down."
+        ewarn "The rest of the Wayland tools are installed; add a working repo later."
+    fi
+
     einfo "Hyprland ecosystem installed"
+}
+
+# _setup_hyprland_repo — Add the third-party repo carrying the Hyprland stack.
+#
+# A dead repository entry is worse than none: xbps reports an error on *every*
+# subsequent `xbps-install -S`, and an orphaned package from a dead repo can
+# block the whole system update once Void bumps a soname (xbps transactions are
+# all-or-nothing). So the entry is only kept when the repo actually answers.
+_setup_hyprland_repo() {
+    local repo_url="https://mirror.black-hole.dev/$(xbps-uhelper arch 2>/dev/null || echo x86_64)"
+    local conf="/etc/xbps.d/20-blackhole.conf"
+
+    mkdir -p /etc/xbps.d
+
+    # Clean up entries for repos that are known to be gone, so an upgrade path
+    # from an older installer run does not keep erroring out.
+    rm -f /etc/xbps.d/20-noctalia.conf /etc/xbps.d/20-hyprland-extra.conf \
+          /etc/xbps.d/hyprland-void.conf /etc/xbps.d/void-extra.conf 2>/dev/null || true
+
+    if ! curl -fsSL --max-time 15 -o /dev/null "${repo_url}/${repo_url##*/}-repodata" 2>/dev/null; then
+        ewarn "Hyprland repo ${repo_url} is unreachable — skipping repo setup"
+        return 0
+    fi
+
+    einfo "Adding Hyprland third-party repository: ${repo_url}"
+    echo "repository=${repo_url}" > "${conf}"
+
+    # -y accepts the repo's RSA key non-interactively; without it xbps waits
+    # for a keypress that nobody can answer inside the progress screen.
+    try "Syncing third-party repository" xbps-install -Sy
 }
 
 # install_gaming — Install gaming packages (Steam, gamescope, MangoHud)
@@ -419,22 +463,27 @@ install_noctalia_shell() {
     local compositor="${NOCTALIA_COMPOSITOR:-Hyprland}"
     einfo "Installing Noctalia Shell with ${compositor}..."
 
-    # Add Noctalia third-party repository for Void
-    mkdir -p /etc/xbps.d
-    echo "repository=https://rxelelo.github.io/noctalia-void-repo" > /etc/xbps.d/20-noctalia.conf
-    try "Syncing Noctalia repo" xbps-install -S
+    # The old noctalia-void-repo (rxelelo.github.io) is gone — a 404 entry in
+    # /etc/xbps.d makes every later `xbps-install -S` fail, so it is removed
+    # rather than written. Noctalia itself is not packaged for Void anywhere;
+    # what the installer can do is lay down its runtime (quickshell, from the
+    # official repo) and the compositor, and leave the shell to be installed
+    # from upstream afterwards.
+    rm -f /etc/xbps.d/20-noctalia.conf 2>/dev/null || true
 
-    # Remove conflicting quickshell package if present
-    if xbps-query quickshell &>/dev/null; then
-        ewarn "Removing conflicting quickshell package (noctalia-qs replaces it)"
-        xbps-remove -y quickshell 2>/dev/null || true
-    fi
+    try "Installing quickshell (Noctalia runtime)" xbps-install -y quickshell
 
     # Install selected Wayland compositor
     _install_noctalia_compositor "${compositor}"
 
-    # Install Noctalia Shell (pulls in noctalia-qs automatically)
-    try "Installing noctalia-shell" xbps-install -y noctalia-shell
+    # Noctalia Shell has no Void package (neither official nor third-party as
+    # of this writing). Try anyway in case that changed, but never fail the
+    # install over it — the compositor and quickshell are already in place.
+    if ! xbps-install -y noctalia-shell 2>/dev/null; then
+        ewarn "noctalia-shell is not packaged for Void — install it from upstream:"
+        ewarn "  https://github.com/noctalia-dev/noctalia-shell"
+        _noctalia_write_manual_note
+    fi
 
     # Install optional runtime dependencies
     local pkg
@@ -1018,4 +1067,158 @@ _install_printing() {
     try "Installing CUPS" xbps-install -y cups cups-filters
     _enable_service "cupsd"
     einfo "Printing support installed"
+}
+
+# _noctalia_write_manual_note — Leave instructions when the shell itself could
+# not be installed from a repository.
+_noctalia_write_manual_note() {
+    cat > /root/POST-INSTALL-NOCTALIA.txt << 'EOF'
+Noctalia Shell — manual step required
+=====================================
+
+The compositor and quickshell (Noctalia's runtime) are installed, but the
+shell has no Void package. Install it from upstream:
+
+  git clone https://github.com/noctalia-dev/noctalia-shell ~/.config/quickshell/noctalia-shell
+  qs -c noctalia-shell
+
+The compositor configs written by the installer already autostart
+`qs -c noctalia-shell`, so it will come up once the files are in place.
+EOF
+    einfo "  Manual instructions written to /root/POST-INSTALL-NOCTALIA.txt"
+}
+
+# install_niri_ecosystem — niri as a standalone session.
+#
+# Deliberately a thin base layer: niri plus the pieces a scrollable-tiling
+# session cannot work without (Xwayland bridge, launcher, bar, notifications,
+# lock/idle, screenshots, clipboard, backlight). Everything here comes from
+# official Void repos — note `Waybar` with a capital W. Theming and dotfiles
+# are left to the user's own config repo rather than duplicated here.
+install_niri_ecosystem() {
+    if [[ "${ENABLE_NIRI:-no}" != "yes" ]]; then
+        return 0
+    fi
+
+    einfo "Installing niri ecosystem..."
+
+    try "Installing niri" xbps-install -y niri
+
+    # xwayland-satellite is what makes X11-only applications work under niri;
+    # niri has no built-in Xwayland.
+    local -a niri_pkgs=(
+        xwayland-satellite
+        fuzzel Waybar mako
+        swaylock swayidle swaybg
+        grim slurp wl-clipboard brightnessctl
+        xdg-desktop-portal-gtk
+    )
+
+    local pkg
+    for pkg in "${niri_pkgs[@]}"; do
+        xbps-install -y "${pkg}" 2>/dev/null || ewarn "Package '${pkg}' not available, skipping"
+    done
+
+    _niri_write_default_config
+    _niri_write_portal_config
+
+    einfo "niri ecosystem installed"
+}
+
+# _niri_write_portal_config — niri is smithay-based, not wlroots, and the
+# default portal chain silently drops FileChooser: "Open file/folder" dialogs
+# in GTK/Electron apps then never appear at all (no error, no window). Pin the
+# implementations that do work. Same override as the dotfiles repo ships.
+_niri_write_portal_config() {
+    mkdir -p /etc/xdg-desktop-portal
+    cat > /etc/xdg-desktop-portal/niri-portals.conf << 'EOF'
+[preferred]
+default=gnome;gtk
+org.freedesktop.impl.portal.FileChooser=gtk
+org.freedesktop.impl.portal.Access=gtk
+org.freedesktop.impl.portal.Notification=gtk
+org.freedesktop.impl.portal.Secret=gnome-keyring
+EOF
+    einfo "  niri portal overrides written (/etc/xdg-desktop-portal/niri-portals.conf)"
+}
+
+# _niri_write_default_config — Minimal working config in /etc/skel.
+# Only what a first login needs: a terminal, a launcher, Xwayland, and a
+# HiDPI-friendly scale on Apple Retina panels.
+_niri_write_default_config() {
+    local skel="/etc/skel/.config/niri"
+    mkdir -p "${skel}"
+
+    # Retina MacBook panels are unusable at scale 1; 1.5 is the sane default
+    # (2.0 leaves too little logical space on a 12" 2304x1440 screen).
+    local scale="1.0"
+    if [[ "${APPLE_DETECTED:-0}" == "1" ]]; then
+        scale="1.5"
+    fi
+
+    local kb_layout="${KEYMAP:-us}"
+
+    cat > "${skel}/config.kdl" << EOF
+// niri config — generated by ${INSTALLER_NAME:-void-installer}
+// Reference: https://yalter.github.io/niri/
+
+input {
+    keyboard {
+        xkb {
+            layout "${kb_layout}"
+        }
+    }
+    touchpad {
+        tap
+        natural-scroll
+    }
+}
+
+output "eDP-1" {
+    scale ${scale}
+}
+
+spawn-at-startup "xwayland-satellite"
+spawn-at-startup "waybar"
+spawn-at-startup "mako"
+
+environment {
+    DISPLAY ":0"
+    QT_QPA_PLATFORM "wayland"
+    MOZ_ENABLE_WAYLAND "1"
+}
+
+binds {
+    Mod+Return { spawn "kitty"; }
+    Mod+D { spawn "fuzzel"; }
+    Mod+Q { close-window; }
+    Mod+Left { focus-column-left; }
+    Mod+Right { focus-column-right; }
+    Mod+Down { focus-window-down; }
+    Mod+Up { focus-window-up; }
+    Mod+Shift+Left { move-column-left; }
+    Mod+Shift+Right { move-column-right; }
+    Mod+F { maximize-column; }
+    Mod+Shift+F { fullscreen-window; }
+    Mod+Shift+E { quit; }
+    Mod+Shift+S { screenshot; }
+    Mod+L { spawn "swaylock"; }
+
+    XF86MonBrightnessUp { spawn "brightnessctl" "set" "5%+"; }
+    XF86MonBrightnessDown { spawn "brightnessctl" "set" "5%-"; }
+}
+EOF
+
+    # Copy into an already-created user account as well
+    if [[ -n "${USERNAME:-}" ]]; then
+        local user_home
+        user_home=$(getent passwd "${USERNAME}" 2>/dev/null | cut -d: -f6) || true
+        if [[ -n "${user_home}" && -d "${user_home}" ]]; then
+            mkdir -p "${user_home}/.config/niri"
+            cp "${skel}/config.kdl" "${user_home}/.config/niri/" 2>/dev/null || true
+            chown -R "${USERNAME}:${USERNAME}" "${user_home}/.config/niri" 2>/dev/null || true
+        fi
+    fi
+
+    einfo "  niri config written to /etc/skel/.config/niri/config.kdl (scale ${scale})"
 }

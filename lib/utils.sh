@@ -91,6 +91,12 @@ try() {
                 ;;
             continue)
                 ewarn "Skipping: ${desc} (user chose to continue)"
+                # A "continue" swallows the failure and the phase still sets
+                # its checkpoint, so without a durable record an incomplete
+                # install looks complete. run_post_install surfaces this file.
+                { printf '%s\t%s\tcmd: %s\n' \
+                    "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo '?')" \
+                    "${desc}" "$*" >> "${SKIPPED_LOG}"; } 2>/dev/null || true
                 [[ ${_stderr_redirected} -eq 1 ]] && exec 2>>"${LOG_FILE}"
                 return 0
                 ;;
@@ -1008,4 +1014,40 @@ generate_password_hash() {
     openssl passwd -6 -stdin <<< "${password}" 2>/dev/null || \
     mkpasswd -m sha-512 --stdin <<< "${password}" 2>/dev/null || \
     { eerror "Cannot generate password hash: neither openssl nor mkpasswd available"; return 1; }
+}
+
+# _resume_target_has_system — True if the planned root partition already holds
+# an extracted Void system. A missing 'disks' checkpoint does NOT mean the disk
+# is empty: checkpoint-migration glitches, checkpoint_validate pruning or an
+# aborted re-run can drop it while a fully installed system still sits there.
+# Reformatting on that basis destroys hours of work — this probes read-only
+# (side-effect free) so the disks phase can refuse the destructive plan.
+# Ported from the Gentoo installer, where a blind reformat nearly wiped a
+# built system twice on a GPD Pocket 4 recovery.
+_resume_target_has_system() {
+    [[ "${DRY_RUN:-0}" == "1" ]] && return 1
+
+    local root="${ROOT_PARTITION:-}"
+    [[ -b "${root}" ]] || root="${RESUME_FOUND_PARTITION:-}"
+    [[ -b "${root}" ]] || return 1
+
+    local probe found=1 opt
+    probe=$(mktemp -d) || return 1
+
+    # btrfs installs live under subvol=@; try that first, then a plain mount.
+    for opt in "ro,subvol=@" "ro"; do
+        if mount -o "${opt}" "${root}" "${probe}" 2>/dev/null; then
+            # Void markers: the XBPS package database and an ID=void os-release.
+            if [[ -d "${probe}/var/db/xbps" ]] || \
+               grep -q '^ID=void' "${probe}/etc/os-release" 2>/dev/null || \
+               [[ -d "${probe}/@/var/db/xbps" ]]; then
+                found=0
+            fi
+            umount "${probe}" 2>/dev/null || umount -l "${probe}" 2>/dev/null || true
+            [[ ${found} -eq 0 ]] && break
+        fi
+    done
+
+    rmdir "${probe}" 2>/dev/null || true
+    return ${found}
 }

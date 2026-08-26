@@ -36,6 +36,7 @@ screen_summary() {
     fi
     summary+="Nonfree repo: ${ENABLE_NONFREE:-no}\n"
     [[ "${ENABLE_HYPRLAND:-no}" == "yes" ]] && summary+="Hyprland:     ecosystem enabled\n"
+    [[ "${ENABLE_NIRI:-no}" == "yes" ]] && summary+="niri:         ecosystem enabled\n"
     [[ "${ENABLE_NOCTALIA:-no}" == "yes" ]] && summary+="Noctalia:     ${NOCTALIA_COMPOSITOR:-Hyprland} compositor\n"
     [[ "${ENABLE_GAMING:-no}" == "yes" ]] && summary+="Gaming:       Steam, gamescope, MangoHud\n"
     [[ "${ASUS_ROG_DETECTED:-0}" == "1" ]] && summary+="ASUS ROG:     detected\n"
@@ -45,6 +46,14 @@ screen_summary() {
     [[ "${ENABLE_SENSORS:-no}" == "yes" ]] && summary+="IIO sensors:  iio-sensor-proxy enabled\n"
     [[ "${ENABLE_WWAN:-no}" == "yes" ]] && summary+="WWAN LTE:     ModemManager enabled\n"
     [[ "${SURFACE_DETECTED:-0}" == "1" ]] && summary+="Surface:      ${SURFACE_MODEL:-detected}\n"
+    if [[ "${APPLE_DETECTED:-0}" == "1" ]]; then
+        summary+="Apple Mac:    ${APPLE_MODEL:-detected}\n"
+        [[ "${APPLE_T2_DETECTED:-0}" == "1" ]] && \
+            summary+="              *** T2 CHIP — NOT SUPPORTED (see t2linux.org) ***\n"
+        summary+="              GRUB also installed to EFI/BOOT (Apple firmware)\n"
+        [[ "${APPLE_SPI_INPUT:-0}" == "1" ]] && \
+            summary+="              SPI keyboard/touchpad forced into initramfs\n"
+    fi
     [[ "${ENABLE_IPTSD:-no}" == "yes" ]] && summary+="Surface tools: iptsd touchscreen\n"
     [[ "${ENABLE_SECUREBOOT:-no}" == "yes" ]] && summary+="Secure Boot:  MOK signing enabled\n"
     summary+="\n"
@@ -64,6 +73,14 @@ screen_summary() {
 
     if [[ "${ESP_REUSE:-no}" == "yes" ]]; then
         summary+="\nDual-boot:    YES (reusing ESP ${ESP_PARTITION:-?})\n"
+    fi
+
+    # macOS being wiped deserves its own line — an APFS container holds the
+    # whole system, and there is no way back without a reinstall from Recovery.
+    if [[ "${MACOS_DETECTED:-0}" == "1" && "${PARTITION_SCHEME:-}" == "auto" ]]; then
+        summary+="\n*** macOS ON THIS DISK WILL BE ERASED ***\n"
+        summary+="    Recovery partition included. Reinstalling macOS later\n"
+        summary+="    means internet recovery (Cmd+Opt+R at power-on).\n"
     fi
 
     # Show detected operating systems

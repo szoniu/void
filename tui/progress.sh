@@ -94,7 +94,9 @@ screen_progress() {
     # checkpoint_validate "disks" then invalidates the disks checkpoint when
     # the mount did not succeed, so the disks phase safely re-runs instead of
     # the installer proceeding onto an unmounted/wrong target.
-    if checkpoint_reached "disks" && ! mountpoint -q "${MOUNTPOINT}" 2>/dev/null; then
+    if ! mountpoint -q "${MOUNTPOINT}" 2>/dev/null && \
+       { checkpoint_reached "disks" || \
+         { [[ "${MODE:-}" == "resume" ]] && _resume_target_has_system; }; }; then
         if [[ -b "${ROOT_PARTITION:-}" ]]; then
             if ! mount_filesystems; then
                 ewarn "Early mount of ${ROOT_PARTITION} failed — disks checkpoint will be re-validated"
@@ -266,7 +268,16 @@ _execute_phase() {
             preflight_checks
             ;;
         disks)
-            disk_execute_plan
+            # Resume onto a disk that already holds a Void install but lost its
+            # 'disks' checkpoint: repartitioning here would wipe it. Refuse the
+            # destructive plan, mount what is there, carry on.
+            if [[ "${MODE:-}" == "resume" ]] && _resume_target_has_system; then
+                ewarn "Resume: ${ROOT_PARTITION:-${RESUME_FOUND_PARTITION:-?}} already holds an"
+                ewarn "installed Void system but the 'disks' checkpoint is missing."
+                ewarn "Refusing to reformat — mounting the existing system instead."
+            else
+                disk_execute_plan
+            fi
             mount_filesystems
             checkpoint_migrate_to_target
             _save_config_to_target

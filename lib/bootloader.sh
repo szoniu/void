@@ -22,9 +22,25 @@ bootloader_install() {
     local grub_target="/boot/efi"
     local grub_id="Void"
 
-    try "Installing GRUB to ESP" \
+    # Apple firmware rebuilds its boot list from its own bless database and
+    # does not reliably persist UEFI NVRAM entries, so a normal grub-install
+    # leaves the Mac unable to find GRUB after a reboot. There the removable
+    # path (\EFI\BOOT\BOOTX64.EFI, always tried by Apple firmware) is the
+    # PRIMARY install and the NVRAM entry is best-effort: efibootmgr failing
+    # on a Mac must not drop the user into the try() recovery menu.
+    if [[ "${APPLE_DETECTED:-0}" == "1" ]]; then
+        einfo "Apple Mac — installing GRUB to the removable path (BOOTX64.EFI)"
+        try "Installing GRUB to ESP (Apple removable path)" \
+            grub-install --target=x86_64-efi --efi-directory="${grub_target}" \
+            --bootloader-id="${grub_id}" --removable --recheck
+        # Secondary, best-effort: a named entry for firmware that does keep it
         grub-install --target=x86_64-efi --efi-directory="${grub_target}" \
-        --bootloader-id="${grub_id}" --recheck
+            --bootloader-id="${grub_id}" --recheck &>/dev/null || true
+    else
+        try "Installing GRUB to ESP" \
+            grub-install --target=x86_64-efi --efi-directory="${grub_target}" \
+            --bootloader-id="${grub_id}" --recheck
+    fi
 
     # Configure GRUB
     _configure_grub
@@ -34,6 +50,21 @@ bootloader_install() {
 
     # Generate GRUB config
     try "Generating GRUB configuration" grub-mkconfig -o /boot/grub/grub.cfg
+
+    # btrfs safety net: if 10_linux somehow did not add rootflags=subvol=, the
+    # kernel would mount the btrfs top level and never find the system. Add it
+    # explicitly and regenerate — but only in that case, to avoid a duplicate.
+    if [[ "${FILESYSTEM:-}" == "btrfs" ]] && \
+       ! grep -q 'rootflags=subvol=' /boot/grub/grub.cfg 2>/dev/null; then
+        ewarn "grub-mkconfig did not add rootflags=subvol= — injecting it manually"
+        if grep -q '^GRUB_CMDLINE_LINUX=' /etc/default/grub 2>/dev/null; then
+            sed -i 's|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX="rootflags=subvol=@"|' /etc/default/grub
+        else
+            echo 'GRUB_CMDLINE_LINUX="rootflags=subvol=@"' >> /etc/default/grub
+        fi
+        try "Re-generating GRUB configuration (btrfs rootflags)" \
+            grub-mkconfig -o /boot/grub/grub.cfg
+    fi
 
     # Verify GRUB detected all known operating systems
     _verify_grub_config
@@ -62,11 +93,11 @@ _configure_grub() {
         root_param="root=${ROOT_PARTITION}"
     fi
 
-    # Add filesystem-specific parameters
+    # Filesystem-specific parameters. NOTE: rootflags=subvol= is deliberately
+    # NOT set here — GRUB's 10_linux detects the mounted subvolume and injects
+    # it itself, so hardcoding it puts the option on the cmdline twice. The
+    # safety net after grub-mkconfig (below) adds it only if 10_linux did not.
     local extra_params=""
-    if [[ "${FILESYSTEM:-ext4}" == "btrfs" ]]; then
-        extra_params="rootflags=subvol=@"
-    fi
 
     # Default kernel cmdline (the "quiet" line). UMPC portrait-panel quirk:
     # fbcon for early console + panel_orientation override for KMS so the

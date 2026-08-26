@@ -504,32 +504,40 @@ mount_filesystems() {
     local fs="${FILESYSTEM:-ext4}"
 
     if [[ "${fs}" == "btrfs" ]]; then
-        # Mount btrfs root to create subvolumes
-        try "Mounting btrfs root" mount "${ROOT_PARTITION}" "${MOUNTPOINT}"
+        # Subvolume CREATION only makes sense on a fresh filesystem, so it stays
+        # gated on root not being mounted yet. Subvolume MOUNTING must happen
+        # unconditionally — see the loop further down.
+        if ! mountpoint -q "${MOUNTPOINT}" 2>/dev/null; then
+            # Mount btrfs top level to create subvolumes
+            try "Mounting btrfs root" mount "${ROOT_PARTITION}" "${MOUNTPOINT}"
 
-        # Create subvolumes
-        if [[ -n "${BTRFS_SUBVOLUMES:-}" ]]; then
-            local IFS=':'
-            local -a parts
-            read -ra parts <<< "${BTRFS_SUBVOLUMES}"
-            local idx
-            for (( idx = 0; idx < ${#parts[@]}; idx += 2 )); do
-                local subvol="${parts[$idx]}"
-                if ! btrfs subvolume list "${MOUNTPOINT}" 2>/dev/null | grep -q " ${subvol}$"; then
-                    try "Creating btrfs subvolume ${subvol}" \
-                        btrfs subvolume create "${MOUNTPOINT}/${subvol}"
-                fi
-            done
+            if [[ -n "${BTRFS_SUBVOLUMES:-}" ]]; then
+                local IFS=':'
+                local -a parts
+                read -ra parts <<< "${BTRFS_SUBVOLUMES}"
+                local idx
+                for (( idx = 0; idx < ${#parts[@]}; idx += 2 )); do
+                    local subvol="${parts[$idx]}"
+                    if ! btrfs subvolume list "${MOUNTPOINT}" 2>/dev/null | grep -q " ${subvol}$"; then
+                        try "Creating btrfs subvolume ${subvol}" \
+                            btrfs subvolume create "${MOUNTPOINT}/${subvol}"
+                    fi
+                done
+            fi
+
+            # Unmount the top level and remount @ as root
+            umount "${MOUNTPOINT}"
+
+            try "Mounting @ subvolume" \
+                mount -o subvol=@,compress=zstd,noatime "${ROOT_PARTITION}" "${MOUNTPOINT}"
         fi
 
-        # Unmount and remount with subvolumes
-        umount "${MOUNTPOINT}"
-
-        # Mount @ subvolume as root
-        try "Mounting @ subvolume" \
-            mount -o subvol=@,compress=zstd,noatime "${ROOT_PARTITION}" "${MOUNTPOINT}"
-
-        # Mount other subvolumes
+        # Mount the non-@ subvolumes ALWAYS — including the --resume path where
+        # root came up already mounted. Skipping this let a resumed `users`
+        # phase run with @home unmounted: `useradd -m` wrote the home directory
+        # into @ instead, and at boot fstab mounted an empty @home over it, so
+        # logins failed (SDDM/GDM bounced, SSH could not chdir to home).
+        # Caught on a real HP ProBook 450 G8 resume in the Gentoo installer.
         if [[ -n "${BTRFS_SUBVOLUMES:-}" ]]; then
             local IFS=':'
             local -a parts
@@ -540,20 +548,26 @@ mount_filesystems() {
                 local mpoint="${parts[$((idx + 1))]}"
                 [[ "${subvol}" == "@" ]] && continue
                 mkdir -p "${MOUNTPOINT}${mpoint}"
-                try "Mounting subvolume ${subvol} at ${mpoint}" \
-                    mount -o "subvol=${subvol},compress=zstd,noatime" \
-                    "${ROOT_PARTITION}" "${MOUNTPOINT}${mpoint}"
+                if ! mountpoint -q "${MOUNTPOINT}${mpoint}" 2>/dev/null; then
+                    try "Mounting subvolume ${subvol} at ${mpoint}" \
+                        mount -o "subvol=${subvol},compress=zstd,noatime" \
+                        "${ROOT_PARTITION}" "${MOUNTPOINT}${mpoint}"
+                fi
             done
         fi
     else
-        # Simple mount for ext4/xfs
-        try "Mounting root filesystem" mount "${ROOT_PARTITION}" "${MOUNTPOINT}"
+        # Simple mount for ext4/xfs — no-op when already mounted (resume)
+        if ! mountpoint -q "${MOUNTPOINT}" 2>/dev/null; then
+            try "Mounting root filesystem" mount "${ROOT_PARTITION}" "${MOUNTPOINT}"
+        fi
     fi
 
-    # Mount ESP
+    # Mount ESP (idempotent — the resume path may already have it)
     local esp_mount="${MOUNTPOINT}/boot/efi"
     mkdir -p "${esp_mount}"
-    try "Mounting ESP" mount "${ESP_PARTITION}" "${esp_mount}"
+    if ! mountpoint -q "${esp_mount}" 2>/dev/null; then
+        try "Mounting ESP" mount "${ESP_PARTITION}" "${esp_mount}"
+    fi
 
     # Activate swap if partition
     if [[ "${SWAP_TYPE:-}" == "partition" && -n "${SWAP_PARTITION:-}" ]]; then

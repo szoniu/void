@@ -90,35 +90,40 @@ detect_gpu() {
     done
 
     if [[ ${#gpu_lines[@]} -ge 2 ]]; then
-        # Multiple GPUs — classify iGPU vs dGPU
-        # Heuristic: PCI slot 00:xx.x = on-die (iGPU), 01:+ = PCIe (dGPU)
-        # Also: NVIDIA is always dGPU, Intel is always iGPU
+        # Multiple GPUs — classify iGPU vs dGPU by VENDOR COMPOSITION.
+        # NVIDIA is always discrete, Intel always integrated; AMD is decided
+        # from what else is present. The old "AMD on PCI bus 00 = iGPU"
+        # heuristic was wrong: modern AMD APU iGPUs sit on a high bus
+        # (c1:/64:), never 00 — that slot belongs to the Intel iGPU. It
+        # misclassified AMD-iGPU + NVIDIA-dGPU laptops (Legion/ROG AMD),
+        # which then lost hybrid/PRIME handling. Fixed first in the Gentoo
+        # installer.
         local igpu_idx=-1 dgpu_idx=-1
         local i
+        local -a amd_idxs=()
         for (( i=0; i<${#gpu_lines[@]}; i++ )); do
-            local slot="${gpu_slots[$i]}"
             local vendor="${gpu_vendors[$i]}"
-            local slot_bus="${slot%%:*}"
-
-            # NVIDIA is always discrete
-            if [[ "${vendor}" == "nvidia" ]]; then
-                dgpu_idx=${i}
-                continue
-            fi
-
-            # Intel is always integrated
-            if [[ "${vendor}" == "intel" ]]; then
-                igpu_idx=${i}
-                continue
-            fi
-
-            # AMD: use PCI slot heuristic — bus 00 = iGPU, otherwise dGPU
-            if [[ "${slot_bus}" == "00" ]]; then
-                igpu_idx=${i}
-            else
-                dgpu_idx=${i}
-            fi
+            case "${vendor}" in
+                nvidia) dgpu_idx=${i} ;;
+                intel)  igpu_idx=${i} ;;
+                amd)    amd_idxs+=("${i}") ;;
+            esac
         done
+
+        if (( ${#amd_idxs[@]} == 1 )); then
+            if [[ ${dgpu_idx} -ge 0 && ${igpu_idx} -lt 0 ]]; then
+                igpu_idx=${amd_idxs[0]}        # AMD iGPU + NVIDIA dGPU
+            elif [[ ${igpu_idx} -ge 0 && ${dgpu_idx} -lt 0 ]]; then
+                dgpu_idx=${amd_idxs[0]}        # Intel iGPU + AMD dGPU
+            else
+                dgpu_idx=${amd_idxs[0]}        # AMD as the extra GPU
+            fi
+        elif (( ${#amd_idxs[@]} >= 2 )); then
+            # AMD iGPU + AMD dGPU (e.g. Framework 16): same driver either
+            # way, assign deterministically so hybrid is reported correctly.
+            igpu_idx=${amd_idxs[0]}
+            dgpu_idx=${amd_idxs[1]}
+        fi
 
         # If we found both iGPU and dGPU — hybrid setup
         if [[ ${igpu_idx} -ge 0 && ${dgpu_idx} -ge 0 ]]; then
@@ -180,17 +185,23 @@ detect_gpu() {
 detect_asus_rog() {
     ASUS_ROG_DETECTED=0
 
-    local board_vendor="" product_name=""
-    if [[ -f /sys/class/dmi/id/board_vendor ]]; then
+    # Match ROG/TUF across product_name, product_family AND board_name: some
+    # BIOSes put the brand in only one of them (a Zephyrus G16 reports it in
+    # product_family alone), and matching product_name only missed those.
+    local board_vendor="" product_name="" product_family="" board_name=""
+    [[ -f /sys/class/dmi/id/board_vendor ]] && \
         board_vendor=$(cat /sys/class/dmi/id/board_vendor 2>/dev/null) || true
-    fi
-    if [[ -f /sys/class/dmi/id/product_name ]]; then
+    [[ -f /sys/class/dmi/id/product_name ]] && \
         product_name=$(cat /sys/class/dmi/id/product_name 2>/dev/null) || true
-    fi
+    [[ -f /sys/class/dmi/id/product_family ]] && \
+        product_family=$(cat /sys/class/dmi/id/product_family 2>/dev/null) || true
+    [[ -f /sys/class/dmi/id/board_name ]] && \
+        board_name=$(cat /sys/class/dmi/id/board_name 2>/dev/null) || true
 
-    if [[ "${board_vendor}" == *"ASUSTeK"* ]] && [[ "${product_name}" =~ (ROG|TUF) ]]; then
+    if [[ "${board_vendor}" == *"ASUSTeK"* ]] && \
+       [[ "${product_name} ${product_family} ${board_name}" =~ (ROG|TUF) ]]; then
         ASUS_ROG_DETECTED=1
-        einfo "ASUS ROG/TUF hardware detected: ${product_name}"
+        einfo "ASUS ROG/TUF hardware detected: ${product_name:-${product_family}}"
     fi
 
     export ASUS_ROG_DETECTED
@@ -558,6 +569,13 @@ detect_installed_oses() {
         esac
     done < <(lsblk -lno PATH,FSTYPE 2>/dev/null | awk '$2 != "" {print}')
 
+    # APFS/HFS+ are invisible to the loop above (and often to libblkid on
+    # older live media), so macOS is detected separately by GPT type GUID.
+    # Guarded: tests source hardware.sh without lib/apple.sh.
+    if declare -F detect_macos_partitions >/dev/null; then
+        detect_macos_partitions
+    fi
+
     export LINUX_DETECTED DETECTED_OSES
 
     # Log results
@@ -667,6 +685,7 @@ deserialize_detected_oses() {
     declare -gA DETECTED_OSES=()
     WINDOWS_DETECTED="${WINDOWS_DETECTED:-0}"
     LINUX_DETECTED="${LINUX_DETECTED:-0}"
+    MACOS_DETECTED="${MACOS_DETECTED:-0}"
 
     local serialized="${DETECTED_OSES_SERIALIZED:-}"
     [[ -z "${serialized}" ]] && return 0
@@ -682,12 +701,15 @@ deserialize_detected_oses() {
         # Restore flags
         if [[ "${name}" == *"Windows"* ]]; then
             WINDOWS_DETECTED=1
+        elif [[ "${name}" == *"macOS"* ]]; then
+            # Recovery alone does not mean a usable macOS install
+            [[ "${name}" != "macOS Recovery" ]] && MACOS_DETECTED=1
         else
             LINUX_DETECTED=1
         fi
     done
 
-    export DETECTED_OSES WINDOWS_DETECTED LINUX_DETECTED
+    export DETECTED_OSES WINDOWS_DETECTED LINUX_DETECTED MACOS_DETECTED
 }
 
 # --- Full Detection ---
@@ -699,6 +721,7 @@ detect_all_hardware() {
     detect_gpu
     detect_asus_rog
     detect_surface
+    detect_apple
     detect_umpc
     detect_bluetooth
     detect_fingerprint
@@ -731,6 +754,15 @@ get_hardware_summary() {
     [[ "${GPU_VENDOR:-}" == "nvidia" ]] && summary+="  Open kernel: ${GPU_USE_NVIDIA_OPEN:-no}\n"
     [[ "${ASUS_ROG_DETECTED:-0}" == "1" ]] && summary+="  ASUS ROG/TUF: detected\n"
     [[ "${SURFACE_DETECTED:-0}" == "1" ]] && summary+="  Microsoft Surface: ${SURFACE_MODEL:-detected}\n"
+    if [[ "${APPLE_DETECTED:-0}" == "1" ]]; then
+        if [[ "${APPLE_T2_DETECTED:-0}" == "1" ]]; then
+            summary+="  Apple Mac: ${APPLE_MODEL:-detected} — !! T2 chip NOT SUPPORTED\n"
+        else
+            summary+="  Apple Mac: ${APPLE_MODEL:-detected}\n"
+        fi
+        [[ "${APPLE_SPI_INPUT:-0}" == "1" ]] && summary+="    Keyboard/touchpad: SPI (applespi)\n"
+        [[ "${MACOS_DETECTED:-0}" == "1" ]] && summary+="    macOS install: present on disk\n"
+    fi
     if [[ "${UMPC_DETECTED:-0}" == "1" ]]; then
         summary+="  UMPC: ${UMPC_VENDOR} ${UMPC_MODEL}\n"
         if [[ -n "${UMPC_PANEL_ORIENTATION:-}" ]]; then

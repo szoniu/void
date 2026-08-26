@@ -37,6 +37,7 @@ lib/                    — Library modules (NEVER execute directly)
 ├── desktop.sh          — desktop_install (GPU drivers, KDE Plasma, SDDM, elogind, PipeWire, KDE apps), install_hyprland_ecosystem, install_noctalia_shell
 ├── swap.sh             — swap_setup (zramen, partition, swap file)
 ├── chroot.sh           — chroot_setup/teardown/exec, copy_dns_info, copy_installer_to_chroot
+├── apple.sh            — detect_apple (DMI), detect_macos_partitions (APFS/HFS+ po GPT GUID), apple_write_early_quirks (applespi→initramfs, hid fnmode), apple_apply_quirks (broadcom-bt-firmware, notatki)
 ├── hooks.sh            — maybe_exec 'before_X' / 'after_X'
 └── preset.sh           — preset_export/import (hardware overlay)
 
@@ -44,6 +45,7 @@ tui/                    — TUI screens
 ├── welcome.sh          — screen_welcome: branding + prereq check
 ├── preset_load.sh      — screen_preset_load: skip/file/browse
 ├── hw_detect.sh        — screen_hw_detect: detect_all_hardware + summary (infobox auto-advance)
+├── wifi_config.sh      — screen_wifi_config: skan SSID + wpa_supplicant + dhcpcd, profil NM dla systemu docelowego (pomijany, gdy sieć już działa)
 ├── disk_select.sh      — screen_disk_select: disk + scheme (auto/dual-boot/manual) + _shrink_wizard()
 ├── filesystem_select.sh — screen_filesystem_select: ext4/btrfs/xfs + btrfs subvolumes
 ├── swap_config.sh      — screen_swap_config: zram/partition/file/none
@@ -65,6 +67,9 @@ data/                   — Static databases + bundled assets
 ├── mirrors.sh          — VOID_MIRRORS[], get_mirror_list_for_dialog()
 ├── dialogrc            — Dark TUI theme (loaded by DIALOGRC in init_dialog)
 └── gum.tar.gz          — Bundled gum v0.17.0 binary (static ELF x86-64, ~4.5 MB)
+
+docs/                   — Dokumentacja szczegółowa
+└── macbook-apple.md    — Void na Intel MacBooku: Apple EFI, APFS, applespi, BCM4350
 
 presets/                — Example configurations
 tests/                  — Tests (bash, standalone)
@@ -145,6 +150,12 @@ All config variables are defined in `CONFIG_VARS[]` in `lib/constants.sh`:
 | `SHRINK_PARTITION_FSTYPE` | ntfs/ext4/btrfs | Filesystem of partition to shrink |
 | `SHRINK_NEW_SIZE_MIB` | integer | New size after shrink (MiB) |
 | `ENABLE_HYPRLAND` | yes/no | Install Hyprland ecosystem (standalone, niezależny od Noctalia) |
+| `ENABLE_NIRI` | yes/no | Install niri ecosystem (niri + xwayland-satellite + Waybar/fuzzel/mako) |
+| `APPLE_DETECTED` | 0/1 | Apple hardware detected (DMI `Apple Inc.`) |
+| `APPLE_MODEL` | string | e.g. `MacBook10,1` |
+| `APPLE_T2_DETECTED` | 0/1 | T2 chip (2018+) — NOT supported |
+| `APPLE_SPI_INPUT` | 0/1 | Keyboard/touchpad on SPI (applespi) |
+| `MACOS_DETECTED` | 0/1 | macOS install found (APFS/HFS+, not just Recovery) |
 | `ENABLE_NOCTALIA` | yes/no | Install Noctalia Shell (Wayland shell) |
 | `NOCTALIA_COMPOSITOR` | Hyprland/niri/sway | Kompozytor Wayland dla Noctalia Shell |
 
@@ -227,6 +238,51 @@ Autostart — konfiguracja w `/etc/skel/.config/{hypr,niri,sway}/`:
 - **sway**: `config` z `exec qs -c noctalia-shell`, environment.d/sway.conf, keybindami IPC
 
 Konfiguracja kopiowana także do `$HOME` użytkownika (jeśli konto już istnieje). Touchpad: `natural_scroll = false` / `disabled` we wszystkich kompozytorach.
+
+#### Intel Apple hardware (MacBook/iMac)
+
+Detal i przepis instalacji: **`docs/macbook-apple.md`**. W skrócie, co robi kod:
+
+- `detect_apple()` (`lib/apple.sh`) — DMI `sys_vendor` = `Apple Inc.`; `APPLE_SPI_INPUT`
+  z obecności ACPI `APP000D` (fallback: lista modeli MacBook8/9/10, MacBookPro13/14).
+  `APPLE_T2_DETECTED` z PCI vendor `0x106b` — T2 (2018+) wymaga apple-bce/t2linux,
+  których instalator NIE ma: głośne ostrzeżenie zamiast mylącej porażki później.
+- `detect_macos_partitions()` — APFS/HFS+ po **GPT type GUID**, bo `lsblk`/libblkid na
+  starszym live medium nie zna APFS. Wołane z `detect_installed_oses()` za strażnikiem
+  `declare -F` (testy sourcują `hardware.sh` bez `apple.sh`). Bez tego tryb `auto`
+  wymazałby macOS **bez** żądania wpisania `ERASE`.
+- `bootloader_install()` — na Apple **drugi** `grub-install --removable`
+  (`EFI/BOOT/BOOTX64.EFI`), bo firmware Apple gubi wpisy NVRAM od `efibootmgr`.
+- `apple_write_early_quirks()` — wołane z `kernel_install()` **przed** dracutem:
+  `applespi`/`spi_pxa2xx_platform`/`intel_lpss_pci` do `force_drivers` + `modules-load.d`,
+  `hid_apple fnmode=2`.
+- Ekran Secure Boot pomijany (Intel Mac bez T2 nie ma UEFI Secure Boot).
+- Checkpoint `apple_quirks` (po `umpc_quirks`): `broadcom-bt-firmware` + `POST-INSTALL-APPLE.txt`.
+
+#### Wi-Fi na live medium (issue #11)
+
+`tui/wifi_config.sh` między `hw_detect` a `disk_select`. Pomija się sam, gdy `has_network`.
+Hasło idzie do `wpa_passphrase` przez **stdin** (nigdy w argumencie — widoczne w `ps`),
+zapisywany jest tylko 64-hex PSK. Profil NetworkManagera ląduje w
+`/tmp/void-installer-wifi.nmconnection`, `copy_installer_to_chroot()` przenosi go do
+chroota, a `install_network_manager()` instaluje do `/etc/NetworkManager/system-connections`
+— pierwszy boot wstaje online. Konieczne na sprzęcie bez portu Ethernet (MacBook 12").
+
+#### Pakiety Wayland w Void — pułapki nazw i repo
+
+- **`Waybar`, nie `waybar`** — mała litera nie rozwiązuje się do niczego.
+- **Hyprland nie istnieje w oficjalnym repo Void** (są tylko `hyprutils`,
+  `hyprwayland-scanner`). `Hyprland`, `hyprpaper`, `hypridle`, `hyprlock` wymagają repo
+  third-party — `_setup_hyprland_repo()` dodaje `mirror.black-hole.dev`, ale **tylko po
+  sprawdzeniu, że repo odpowiada**: martwy wpis w `/etc/xbps.d/` sypie błędem przy każdym
+  `xbps-install -S`, a osierocony pakiet blokuje aktualizację całego systemu przy podbiciu
+  soname (XBPS jest all-or-nothing).
+- **`rxelelo.github.io/noctalia-void-repo` jest martwe (404)** — kod je teraz kasuje,
+  a nie zapisuje. Noctalia nie ma pakietu dla Void: instalowany jest `quickshell`
+  (oficjalne repo) + kompozytor, sam shell → `POST-INSTALL-NOCTALIA.txt`.
+- **niri jest w oficjalnym repo** (razem z `xwayland-satellite`, `fuzzel`, `mako`,
+  `swaylock`, `swayidle`, `Waybar`) — `install_niri_ecosystem()` w `lib/desktop.sh`,
+  opcja `niri-ecosystem` w ekranie 13. Sesja niri działa obok GNOME/GDM.
 
 #### Microsoft Surface support
 
@@ -414,12 +470,59 @@ bash tests/test_multiboot.sh     # Multi-boot OS detection + serialization
 bash tests/test_infer_config.sh  # Config inference from installed system
 bash tests/test_validate.sh      # validate_config() — pre-install safety gate
 bash tests/test_shrink.sh        # Shrink planning + safety gate (destructive path)
+bash tests/test_apple.sh         # Apple/macOS detection + GPT GUID + config plumbing
+bash tests/test_phase_order.sh   # Structural guards: phase order, resume, rootflags, package names
 bash tests/shellcheck.sh         # Static analysis / lint (needs shellcheck)
 ```
 
-All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 9 functional files (255 assertions) + `shellcheck.sh` (lints all 52 `.sh` files; needs `shellcheck` installed).
+All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 11 functional files (312 assertions) + `shellcheck.sh` (lints all 57 `.sh` files; needs `shellcheck` installed).
 
 ## Known patterns and pitfalls
+
+### Fixes ported from the Gentoo installer (each one cost a real machine)
+
+- **Resume must never blind-reformat.** A missing `disks` checkpoint does NOT mean
+  an empty disk — checkpoint migration glitches, `checkpoint_validate` pruning or
+  an aborted re-run can drop it while a complete install sits on the partition.
+  `_resume_target_has_system()` (`lib/utils.sh`) probes read-only (`ro,subvol=@`
+  then `ro`, looks for `/var/db/xbps` or `ID=void`); the `disks` phase in
+  `tui/progress.sh` refuses `disk_execute_plan` when it says yes in resume mode
+  and mounts instead. In Gentoo this nearly wiped a built system twice.
+- **`users` runs BEFORE `kernel`/`desktop`.** Those are the longest, most
+  failure-prone phases; with `users` last, a desktop failure left root with the
+  ROOTFS's locked `*` password and no user account — nothing could log in. An
+  empty `ROOT_PASSWORD_HASH` now warns loudly. Bonus: `/etc/skel` configs written
+  by the desktop phase can be copied into a real home directory.
+- **btrfs subvolumes mount on the resume path too.** Mounting `@home` used to sit
+  inside the "root not yet mounted" branch, so a resumed `users` phase ran with
+  `@home` unmounted: `useradd -m` wrote the home into `@`, and at boot fstab
+  mounted an empty `@home` over it (login bounced back to the greeter).
+  `mount_filesystems()` is now idempotent per mount (`mountpoint -q` guards).
+- **Never hardcode `rootflags=subvol=@`.** GRUB's `10_linux` detects the mounted
+  subvolume and injects it, so setting it in `GRUB_CMDLINE_LINUX` duplicates the
+  option. A safety net after `grub-mkconfig` adds it only if `grub.cfg` lacks it.
+- **Apple firmware drops NVRAM boot entries.** On `APPLE_DETECTED` the removable
+  path (`EFI/BOOT/BOOTX64.EFI`) is the PRIMARY `grub-install`; the named entry is
+  best-effort (`|| true`) so an `efibootmgr` failure on a Mac does not drop the
+  user into the `try()` recovery menu.
+- **Logs and skipped steps must survive.** The chroot phase logs to
+  `/var/log/void-installer.log` (append across resumes) because `/tmp` is tmpfs
+  and vanished exactly when a post-mortem was needed. `try()`'s "continue" choice
+  appends to `SKIPPED_LOG` and `run_post_install` surfaces it — otherwise an
+  incomplete install looks complete.
+- **GPU classification is by vendor composition, not PCI bus.** Modern AMD APU
+  iGPUs sit on a high bus (`c1:`/`64:`), never `00`, so the old heuristic
+  misclassified AMD-iGPU + NVIDIA-dGPU laptops and lost hybrid/PRIME.
+- **Laptop power management** (`install_power_management()`, battery-gated):
+  `power-profiles-daemon` is what the GNOME/KDE power applet talks to — without it
+  the desktop shows no profiles at all — plus `thermald` on Intel, which matters
+  most on fanless machines.
+- **Wi-Fi backend follows the live medium.** `tui/wifi_config.sh` uses nmcli when
+  NetworkManager runs (every desktop-flavour Void ISO) and wpa_supplicant+dhcpcd
+  otherwise. Starting a hand-rolled wpa_supplicant next to NM breaks the link
+  rather than creating it. Either way only the derived 64-hex PSK is written,
+  via one shared keyfile writer, and `base-system`/`linux-base` guarantee `iw`,
+  `wpa_supplicant`, `dhcpcd` and `linux-firmware-network` are present.
 
 - `(( var++ ))` at var=0 returns exit 1 under `set -e` — always add `|| true`
 - `lib/constants.sh` uses `: "${VAR:=default}"` instead of `readonly` so tests can override values

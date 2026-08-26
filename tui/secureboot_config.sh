@@ -10,6 +10,16 @@ screen_secureboot_config() {
         return "${TUI_NEXT}"
     fi
 
+    # Intel Macs (without a T2 chip) have no UEFI Secure Boot. Offering MOK
+    # enrolment there only adds a shim chainload that Apple firmware cannot
+    # verify anyway, so skip the screen entirely.
+    if [[ "${APPLE_DETECTED:-0}" == "1" ]]; then
+        ENABLE_SECUREBOOT="no"
+        export ENABLE_SECUREBOOT
+        einfo "Apple hardware — Secure Boot signing skipped (no UEFI Secure Boot)"
+        return "${TUI_NEXT}"
+    fi
+
     local sb_active=0
     is_secureboot_active && sb_active=1
 

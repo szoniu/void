@@ -9,6 +9,7 @@ readonly INSTALLER_NAME="Void Linux TUI Installer"
 : "${MOUNTPOINT:=/mnt/void}"
 : "${CHROOT_INSTALLER_DIR:=/tmp/void-installer}"
 : "${LOG_FILE:=/tmp/void-installer.log}"
+: "${SKIPPED_LOG:=/tmp/void-installer-skipped.log}"
 : "${CHECKPOINT_DIR:=/tmp/void-installer-checkpoints}"
 : "${CHECKPOINT_DIR_SUFFIX:=/tmp/void-installer-checkpoints}"
 : "${CONFIG_FILE:=/tmp/void-installer.conf}"
@@ -65,6 +66,7 @@ readonly -a CHECKPOINTS=(
     "users"
     "extras"
     "umpc_quirks"
+    "apple_quirks"
     "finalize"
 )
 
@@ -122,6 +124,11 @@ readonly -a CONFIG_VARS=(
     ENABLE_WWAN
     SURFACE_DETECTED
     SURFACE_MODEL
+    APPLE_DETECTED
+    APPLE_T2_DETECTED
+    APPLE_MODEL
+    APPLE_SPI_INPUT
+    MACOS_DETECTED
     ENABLE_IPTSD
     UMPC_DETECTED
     UMPC_VENDOR
@@ -136,6 +143,7 @@ readonly -a CONFIG_VARS=(
     SHRINK_PARTITION_FSTYPE
     SHRINK_NEW_SIZE_MIB
     ENABLE_HYPRLAND
+    ENABLE_NIRI
     ENABLE_NOCTALIA
     NOCTALIA_COMPOSITOR
     ENABLE_GAMING

@@ -127,5 +127,14 @@ copy_installer_to_chroot() {
     # Ensure scripts are executable
     chmod +x "${dest}/install.sh" "${dest}/configure.sh"
 
+    # Carry the staged Wi-Fi keyfile into the chroot's /tmp so the networking
+    # phase can install it (a Wi-Fi-only machine must boot online).
+    local wifi_stage="${WIFI_PROFILE_STAGE:-/tmp/void-installer-wifi.nmconnection}"
+    if [[ -f "${wifi_stage}" ]]; then
+        mkdir -p "${MOUNTPOINT}/tmp"
+        install -m 600 "${wifi_stage}" "${MOUNTPOINT}${wifi_stage}" 2>/dev/null \
+            || ewarn "Could not stage Wi-Fi profile inside chroot"
+    fi
+
     einfo "Installer copied to ${CHROOT_INSTALLER_DIR}"
 }
