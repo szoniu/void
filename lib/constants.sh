@@ -10,6 +10,11 @@ readonly INSTALLER_NAME="Void Linux TUI Installer"
 : "${CHROOT_INSTALLER_DIR:=/tmp/void-installer}"
 : "${LOG_FILE:=/tmp/void-installer.log}"
 : "${SKIPPED_LOG:=/tmp/void-installer-skipped.log}"
+# device-mapper name for the LUKS container (/dev/mapper/<name>)
+: "${LUKS_NAME:=cryptroot}"
+# Keyfile staged by the outer process, installed into the target by lib/luks.sh
+: "${LUKS_KEYFILE_STAGE:=/tmp/void-installer-luks.key}"
+: "${LUKS_KEYFILE_TARGET:=/boot/luks-keyfile}"
 : "${CHECKPOINT_DIR:=/tmp/void-installer-checkpoints}"
 : "${CHECKPOINT_DIR_SUFFIX:=/tmp/void-installer-checkpoints}"
 : "${CONFIG_FILE:=/tmp/void-installer.conf}"
@@ -142,6 +147,8 @@ readonly -a CONFIG_VARS=(
     SHRINK_PARTITION
     SHRINK_PARTITION_FSTYPE
     SHRINK_NEW_SIZE_MIB
+    LUKS_ENABLED
+    LUKS_PARTITION
     ENABLE_HYPRLAND
     ENABLE_NIRI
     ENABLE_NOCTALIA

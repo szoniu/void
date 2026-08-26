@@ -14,6 +14,7 @@ Rdzeń jest dojrzały i na parytecie z działającym instalatorem Gentoo. Pełny
 - ✅ **`--resume` nie formatuje dysku, na którym już jest system** — brak checkpointu `disks` nie znaczy „pusty dysk"; sonda read-only (`_resume_target_has_system`) blokuje destrukcyjny plan.
 - ✅ **Konta zakładane PRZED kernelem i desktopem** — awaria długiej fazy nie zostawia już systemu, do którego nie da się zalogować.
 - ✅ **Wi-Fi w instalatorze** (ekran 4) — wpa_supplicant/dhcpcd albo NetworkManager, zależnie od tego, co jest na live medium. Sieć trafia też do zainstalowanego systemu.
+- ✅ **Szyfrowanie dysku (LUKS)** — kontener LUKS1 na partycji root, GRUB z `cryptodisk`, keyfile w initramfs (jedno pytanie o hasło zamiast dwóch). Hasło nigdy nie trafia do configu, logu ani do `ps`.
 - ✅ **Intel Maki (pre-T2)** — GRUB na ścieżce removable, applespi w initramfs, wykrywanie macOS/APFS. T2 (2018+) jawnie niewspierane.
 
 Szczegóły napraw w `CLAUDE.md` → „Readiness status".
@@ -174,7 +175,7 @@ Logi instalacji zostają na dysku: `/var/log/void-installer.log` (faza chroot),
 | 3 | Hardware | Podgląd wykrytego CPU, GPU, dysków, peryferiali, zainstalowanych OS-ów (w tym Microsoft Surface i Secure Boot) |
 | 4 | WiFi | Pomijany, gdy sieć działa. Skan SSID + hasło; profil trafia też do instalowanego systemu |
 | 5 | Dysk | Wybór dysku + schemat (auto/dual-boot/manual) + shrink wizard |
-| 6 | Filesystem | ext4 / btrfs (ze subvolumes) / XFS |
+| 6 | Filesystem | ext4 / btrfs (ze subvolumes) / XFS + **szyfrowanie LUKS** |
 | 7 | Swap | zram (domyślnie) / partycja / plik / brak |
 | 8 | Sieć | Hostname + mirror Void |
 | 9 | Locale | Timezone, język, keymap |
@@ -209,6 +210,27 @@ Oprócz KDE Plasma i GNOME, installer oferuje opcjonalne środowiska Wayland (ek
 - **Noctalia Shell** — Wayland shell oparty na Quickshell, z wyborem kompozytora: **Hyprland**, **niri** lub **sway**. Sam shell nie jest pakietowany dla Void (dawne `noctalia-void-repo` jest martwe) — instalator kładzie kompozytor i `quickshell`, a instrukcję dokończenia zostawia w `/root/POST-INSTALL-NOCTALIA.txt`.
 
 Opcje są niezależne od siebie i od KDE/GNOME.
+
+## Szyfrowanie dysku (LUKS)
+
+Pytanie pojawia się na ekranie 6 (Filesystem), zaraz po wyborze systemu plików —
+szyfrowany jest **root**, ESP zostaje jawny (tak wymaga UEFI).
+
+- Kontener to **LUKS1**, bo GRUB musi go otworzyć, żeby w ogóle odczytać kernel
+  z `/boot` (LUKS2 obsługuje tylko z PBKDF2, nie z domyślnym Argon2i).
+- Instalator dokłada **keyfile do initramfs**, więc hasło podajesz **raz** — przy
+  starcie GRUB-a. Bez tego pytanie pojawiłoby się dwa razy. Keyfile jest bezpieczny,
+  bo initramfs leży na zaszyfrowanym roocie; przy osobnym `/boot` instalator go
+  **nie** założy.
+- Hasło **nie jest zapisywane nigdzie** — ani w pliku konfiguracji, ani w logu, ani
+  w argumentach procesu. Dlatego `--resume` zapyta o nie ponownie.
+- **Nie ma odzyskiwania.** Zapomniane hasło = utracone dane.
+- Tryb partycjonowania `manual` nie jest wspierany — tam kontener zakładasz sam.
+
+> **Laptop z klawiaturą na SPI** (MacBook 8,1/9,1/10,1, MacBook Pro 13/14):
+> pytanie o hasło leci z initramfs, więc klawiatura musi tam działać. Instalator
+> wrzuca `applespi` do initramfs automatycznie — ale miej pod ręką klawiaturę USB
+> na wypadek, gdyby coś poszło nie tak przy pierwszym starcie.
 
 ## Dual-boot (Windows, Linux, multi-boot)
 

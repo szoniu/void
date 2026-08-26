@@ -925,6 +925,39 @@ _infer_secureboot_from_installed() {
     fi
 }
 
+# _infer_luks_from_installed — Recover LUKS settings from /etc/crypttab.
+# A resumed run has to know the raw container partition: ROOT_PARTITION found
+# by the disk scan is the mapper device, and the GRUB cmdline plus crypttab
+# both need the UUID of the partition underneath it.
+_infer_luks_from_installed() {
+    local mp="$1"
+    local crypttab="${mp}/etc/crypttab"
+
+    [[ -f "${crypttab}" ]] || return 0
+
+    local name source_field rest
+    while read -r name source_field rest; do
+        [[ -z "${name}" || "${name}" == \#* ]] && continue
+
+        LUKS_ENABLED="yes"
+        LUKS_NAME="${name}"
+
+        # source is UUID=<uuid> (what we write) or a bare device path
+        if [[ "${source_field}" == UUID=* ]]; then
+            local uuid="${source_field#UUID=}"
+            local dev
+            dev=$(_resolve_uuid "${uuid}") || true
+            [[ -n "${dev}" ]] && LUKS_PARTITION="${dev}"
+        elif [[ "${source_field}" == /dev/* ]]; then
+            LUKS_PARTITION="${source_field}"
+        fi
+
+        export LUKS_ENABLED LUKS_NAME LUKS_PARTITION
+        einfo "Inferred LUKS: ${LUKS_NAME} on ${LUKS_PARTITION:-unknown}"
+        break
+    done < "${crypttab}"
+}
+
 # infer_config_from_partition — Read config from an installed system's files
 # Usage: infer_config_from_partition /dev/sdX2 ext4
 # Returns: 0 = sufficient config inferred, 1 = insufficient
@@ -970,6 +1003,7 @@ infer_config_from_partition() {
     _infer_swap_type "${mp}"
     _infer_surface_from_installed "${mp}"
     _infer_secureboot_from_installed "${mp}"
+    _infer_luks_from_installed "${mp}"
     _infer_partition_scheme
 
     # Cleanup

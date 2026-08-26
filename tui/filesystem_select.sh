@@ -82,6 +82,58 @@ Example: @:/:@home:/home:@var-log:/var/log" \
         export BTRFS_SUBVOLUMES
     fi
 
-    einfo "Filesystem: ${FILESYSTEM}"
+    _screen_luks_prompt || return "${TUI_BACK}"
+
+    einfo "Filesystem: ${FILESYSTEM}, LUKS: ${LUKS_ENABLED:-no}"
     return "${TUI_NEXT}"
+}
+
+# _screen_luks_prompt — Offer full-disk encryption for the root partition.
+#
+# Only offered for schemes where the installer creates the root filesystem:
+# in manual mode the partition already exists (and may already be a container
+# the user set up themselves), so the installer does not touch it.
+_screen_luks_prompt() {
+    if [[ "${PARTITION_SCHEME:-}" == "manual" ]]; then
+        LUKS_ENABLED="${LUKS_ENABLED:-no}"
+        export LUKS_ENABLED
+        return 0
+    fi
+
+    # Void's live ISO ships cryptsetup in every flavour, but the installer
+    # also runs from other live media.
+    if [[ "${DRY_RUN:-0}" != "1" ]] && ! command -v cryptsetup >/dev/null 2>&1; then
+        LUKS_ENABLED="no"
+        export LUKS_ENABLED
+        einfo "cryptsetup not available on this live medium — encryption not offered"
+        return 0
+    fi
+
+    local warn=""
+    if [[ "${APPLE_SPI_INPUT:-0}" == "1" ]]; then
+        # The passphrase prompt runs from the initramfs, before the desktop
+        # exists — on these Macs that only works because the SPI keyboard
+        # modules are forced into the initramfs (lib/apple.sh).
+        warn="\n\nThis Mac's keyboard is on SPI; the installer puts its\ndrivers in the initramfs so you can type the passphrase\nat boot. An external USB keyboard is a good backup.\n"
+    fi
+
+    if dialog_yesno "Disk Encryption (LUKS)" \
+        "Encrypt the root partition with LUKS?\n\n\
+Everything except the EFI partition is encrypted. You type\n\
+a passphrase at every boot, before the system starts.\n\n\
+There is NO recovery if the passphrase is lost.${warn}"; then
+        LUKS_ENABLED="yes"
+        export LUKS_ENABLED
+
+        if ! luks_prompt_passphrase; then
+            LUKS_ENABLED="no"
+            export LUKS_ENABLED
+            return 1
+        fi
+    else
+        LUKS_ENABLED="no"
+        export LUKS_ENABLED
+    fi
+
+    return 0
 }

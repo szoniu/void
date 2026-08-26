@@ -94,6 +94,13 @@ screen_progress() {
     # checkpoint_validate "disks" then invalidates the disks checkpoint when
     # the mount did not succeed, so the disks phase safely re-runs instead of
     # the installer proceeding onto an unmounted/wrong target.
+    # An encrypted root has to be unlocked before anything can be mounted —
+    # ROOT_PARTITION points at /dev/mapper/<name>, which does not exist until
+    # the container is open.
+    if [[ "${LUKS_ENABLED:-no}" == "yes" ]] && declare -F luks_open_for_resume >/dev/null; then
+        luks_open_for_resume || ewarn "Could not open the LUKS container"
+    fi
+
     if ! mountpoint -q "${MOUNTPOINT}" 2>/dev/null && \
        { checkpoint_reached "disks" || \
          { [[ "${MODE:-}" == "resume" ]] && _resume_target_has_system; }; }; then

@@ -35,6 +35,9 @@ screen_summary() {
         summary+="GPU:          ${GPU_VENDOR:-unknown} (${GPU_DRIVER:-auto})\n"
     fi
     summary+="Nonfree repo: ${ENABLE_NONFREE:-no}\n"
+    if [[ "${LUKS_ENABLED:-no}" == "yes" ]]; then
+        summary+="Encryption:   LUKS on ${LUKS_PARTITION:-root} (passphrase at every boot)\n"
+    fi
     [[ "${ENABLE_HYPRLAND:-no}" == "yes" ]] && summary+="Hyprland:     ecosystem enabled\n"
     [[ "${ENABLE_NIRI:-no}" == "yes" ]] && summary+="niri:         ecosystem enabled\n"
     [[ "${ENABLE_NOCTALIA:-no}" == "yes" ]] && summary+="Noctalia:     ${NOCTALIA_COMPOSITOR:-Hyprland} compositor\n"
