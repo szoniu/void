@@ -65,6 +65,7 @@ readonly -a CHECKPOINTS=(
     "fstab"
     "networking"
     "bootloader"
+    "snapshots"
     "secureboot"
     "swap_setup"
     "desktop"
@@ -81,6 +82,7 @@ readonly -a CONFIG_VARS=(
     PARTITION_SCHEME
     FILESYSTEM
     BTRFS_SUBVOLUMES
+    ENABLE_SNAPPER
     SWAP_TYPE
     SWAP_SIZE_MIB
     HOSTNAME

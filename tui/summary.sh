@@ -35,6 +35,7 @@ screen_summary() {
         summary+="GPU:          ${GPU_VENDOR:-unknown} (${GPU_DRIVER:-auto})\n"
     fi
     summary+="Nonfree repo: ${ENABLE_NONFREE:-no}\n"
+    [[ "${ENABLE_SNAPPER:-no}" == "yes" ]] && summary+="Snapshots:    snapper + grub-btrfs (hourly timeline)\n"
     if [[ "${LUKS_ENABLED:-no}" == "yes" ]]; then
         summary+="Encryption:   LUKS on ${LUKS_PARTITION:-root} (passphrase at every boot)\n"
     fi

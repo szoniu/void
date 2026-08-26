@@ -50,6 +50,7 @@ source "${LIB_DIR}/swap.sh"
 source "${LIB_DIR}/umpc.sh"
 source "${LIB_DIR}/apple.sh"
 source "${LIB_DIR}/luks.sh"
+source "${LIB_DIR}/snapper.sh"
 source "${LIB_DIR}/chroot.sh"
 source "${LIB_DIR}/hooks.sh"
 source "${LIB_DIR}/preset.sh"
@@ -324,6 +325,18 @@ _do_chroot_phases() {
         checkpoint_set "bootloader"
     else
         einfo "Skipping bootloader (checkpoint reached)"
+    fi
+
+    # Phase 10a: Btrfs snapshots — after the bootloader, because grub-btrfs
+    # generates GRUB menu entries and needs GRUB already installed.
+    if ! checkpoint_reached "snapshots"; then
+        einfo "--- Phase: Snapshots ---"
+        maybe_exec 'before_snapshots'
+        snapper_setup
+        maybe_exec 'after_snapshots'
+        checkpoint_set "snapshots"
+    else
+        einfo "Skipping snapshots (checkpoint reached)"
     fi
 
     # Phase 10b: Secure Boot

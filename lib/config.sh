@@ -173,6 +173,14 @@ validate_config() {
         errors+=("ENABLE_SECUREBOOT=yes requires ESP_PARTITION to be set")
     fi
 
+    if [[ "${ENABLE_SNAPPER:-no}" != "no" && "${ENABLE_SNAPPER:-no}" != "yes" ]]; then
+        errors+=("ENABLE_SNAPPER='${ENABLE_SNAPPER}' — must be yes or no")
+    fi
+
+    if [[ "${ENABLE_SNAPPER:-no}" == "yes" && "${FILESYSTEM:-}" != "btrfs" ]]; then
+        errors+=("ENABLE_SNAPPER=yes requires FILESYSTEM=btrfs (got '${FILESYSTEM:-unset}')")
+    fi
+
     if [[ "${WAYLAND_ONLY:-no}" != "no" && "${WAYLAND_ONLY:-no}" != "yes" ]]; then
         errors+=("WAYLAND_ONLY='${WAYLAND_ONLY}' — must be yes or no")
     fi
