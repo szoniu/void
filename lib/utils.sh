@@ -925,6 +925,59 @@ _infer_secureboot_from_installed() {
     fi
 }
 
+# _infer_peripherals_from_installed — Recover the opt-in peripheral choices.
+#
+# Without this a `--resume` that lost its config would silently drop fprintd,
+# bolt, iio-sensor-proxy and ModemManager: the hardware is still detected, but
+# ENABLE_* defaults to "no", so the phase that installs them does nothing and
+# the finished system quietly lacks the fingerprint reader the user asked for.
+#
+# Detection is by installed binary and by enabled runit service rather than by
+# XBPS plist name — binaries and service directories are stable, package file
+# names carry versions.
+_infer_peripherals_from_installed() {
+    local mp="$1"
+
+    if [[ -x "${mp}/usr/bin/fprintd-enroll" ]] || [[ -d "${mp}/var/service/fprintd" ]]; then
+        ENABLE_FINGERPRINT="yes"; FINGERPRINT_DETECTED=1
+        export ENABLE_FINGERPRINT FINGERPRINT_DETECTED
+    fi
+
+    if [[ -x "${mp}/usr/bin/boltctl" ]] || [[ -d "${mp}/var/service/bolt" ]]; then
+        ENABLE_THUNDERBOLT="yes"; THUNDERBOLT_DETECTED=1
+        export ENABLE_THUNDERBOLT THUNDERBOLT_DETECTED
+    fi
+
+    if [[ -x "${mp}/usr/libexec/iio-sensor-proxy" ]] || \
+       [[ -d "${mp}/var/service/iio-sensor-proxy" ]]; then
+        ENABLE_SENSORS="yes"; SENSORS_DETECTED=1
+        export ENABLE_SENSORS SENSORS_DETECTED
+    fi
+
+    if [[ -x "${mp}/usr/sbin/ModemManager" ]] || [[ -d "${mp}/var/service/ModemManager" ]]; then
+        ENABLE_WWAN="yes"; WWAN_DETECTED=1
+        export ENABLE_WWAN WWAN_DETECTED
+    fi
+
+    if [[ -d "${mp}/var/service/bluetoothd" ]]; then
+        BLUETOOTH_DETECTED=1
+        export BLUETOOTH_DETECTED
+    fi
+
+    # Wayland-only leaves a fingerprint of its own: greetd instead of a
+    # display manager, and no xorg-server.
+    if [[ -d "${mp}/var/service/greetd" ]] && [[ ! -x "${mp}/usr/bin/Xorg" ]]; then
+        WAYLAND_ONLY="yes"
+        export WAYLAND_ONLY
+    fi
+
+    # Snapshots: snapper's config is the reliable marker
+    if [[ -f "${mp}/etc/snapper/configs/root" ]]; then
+        ENABLE_SNAPPER="yes"
+        export ENABLE_SNAPPER
+    fi
+}
+
 # _infer_luks_from_installed — Recover LUKS settings from /etc/crypttab.
 # A resumed run has to know the raw container partition: ROOT_PARTITION found
 # by the disk scan is the mapper device, and the GRUB cmdline plus crypttab
@@ -1004,6 +1057,7 @@ infer_config_from_partition() {
     _infer_surface_from_installed "${mp}"
     _infer_secureboot_from_installed "${mp}"
     _infer_luks_from_installed "${mp}"
+    _infer_peripherals_from_installed "${mp}"
     _infer_partition_scheme
 
     # Cleanup

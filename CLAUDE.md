@@ -265,6 +265,23 @@ Detal i przepis instalacji: **`docs/macbook-apple.md`**. W skrócie, co robi kod
 - Ekran Secure Boot pomijany (Intel Mac bez T2 nie ma UEFI Secure Boot).
 - Checkpoint `apple_quirks` (po `umpc_quirks`): `broadcom-bt-firmware` + `POST-INSTALL-APPLE.txt`.
 
+#### Flatpak (issue #15)
+
+Sam pakiet `flatpak` daje system, w którym `flatpak install` kończy się „no
+remote refs found". `configure_flatpak()` (`lib/desktop.sh`, faza extras, tylko
+gdy użytkownik wybrał flatpak) dokłada trzy brakujące części:
+
+- **remote Flathub** (`--if-not-exists`, więc idempotentnie),
+- **portal** — `xdg-desktop-portal` + wariant pod środowisko (`-gnome`, `-kde`,
+  inaczej `-gtk`); bez niego okna wyboru pliku i udostępnianie ekranu w
+  sandboxie **po cichu nie działają**,
+- **`/etc/profile.d/flatpak.sh`** dopisujące `/var/lib/flatpak/exports/share`
+  do `XDG_DATA_DIRS` — bez tego aplikacje instalują się poprawnie i **nigdy nie
+  pojawiają się w menu**.
+
+`remote-add` pobiera `.flatpakrepo` (z kluczem GPG), więc wymaga sieci; porażka
+nie jest fatalna — komenda do powtórzenia ląduje w `POST-INSTALL-FLATPAK.txt`.
+
 #### Btrfs snapshots — snapper + grub-btrfs (issue #8)
 
 Void pakietuje pod runit dokładnie to, co na innych dystrybucjach trzeba dłubać
@@ -577,10 +594,12 @@ bash tests/test_phase_order.sh   # Structural guards: phase order, resume, rootf
 bash tests/test_luks.sh          # LUKS planning, secret handling, validation gates
 bash tests/test_wayland.sh       # Wayland-only: package swaps, greetd, verification
 bash tests/test_snapper.sh       # Snapshots + GRUB redirect stub (Secure Boot)
+bash tests/test_hybrid_gpu.sh    # GPU classification, hybrid setups, NVIDIA generations
+bash tests/test_peripherals.sh   # Peripheral opt-ins, resume recovery, Flatpak wiring
 bash tests/shellcheck.sh         # Static analysis / lint (needs shellcheck)
 ```
 
-All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 14 functional files (402 assertions) + `shellcheck.sh` (lints all 62 `.sh` files; needs `shellcheck` installed).
+All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 16 functional files (506 assertions) + `shellcheck.sh` (lints all 64 `.sh` files; needs `shellcheck` installed).
 
 ## Known patterns and pitfalls
 
@@ -630,6 +649,12 @@ All tests are standalone — they do not require root or hardware. They use `DRY
   `wpa_supplicant`, `dhcpcd` and `linux-firmware-network` are present.
 
 - `(( var++ ))` at var=0 returns exit 1 under `set -e` — always add `|| true`
+- **A function must not end on a bare test.** `detect_gpu` ended with
+  `[[ "${GPU_VENDOR}" == "nvidia" ]] && einfo ...`, so on every non-NVIDIA machine
+  it returned 1 — and `detect_all_hardware` runs under `set -e`. It only looked
+  harmless because the wizard calls the screen from a conditional context, which
+  suspends errexit for the whole call chain. Close such functions with `return 0`.
+  Found by `test_hybrid_gpu.sh`, not by use.
 - `lib/constants.sh` uses `: "${VAR:=default}"` instead of `readonly` so tests can override values
 - `lib/protection.sh` checks `$_VOID_INSTALLER` — tests must export this
 - `config_save` uses `${VAR@Q}` (bash 4.4+) for safe quoting, creates files with `umask 077` (contains password hashes)

@@ -23,7 +23,11 @@ nvidia_generation() {
 
     if (( dec_id >= 0x2900 )); then
         echo "blackwell"
-    elif (( dec_id >= 0x2700 )); then
+    elif (( dec_id >= 0x2600 )); then
+        # Ada starts at AD102 = 0x2684 (RTX 4090), not 0x2700: the old
+        # threshold classified the 4090 as Ampere, which cost it the
+        # "prefers open kernel module" recommendation. Ampere tops out in
+        # the 0x25xx range (GA107 = 0x25a0), so 0x2600 is a clean split.
         echo "ada"
     elif (( dec_id >= 0x2200 )); then
         echo "ampere"

@@ -14,6 +14,7 @@ Rdzeń jest dojrzały i na parytecie z działającym instalatorem Gentoo. Pełny
 - ✅ **`--resume` nie formatuje dysku, na którym już jest system** — brak checkpointu `disks` nie znaczy „pusty dysk"; sonda read-only (`_resume_target_has_system`) blokuje destrukcyjny plan.
 - ✅ **Konta zakładane PRZED kernelem i desktopem** — awaria długiej fazy nie zostawia już systemu, do którego nie da się zalogować.
 - ✅ **Wi-Fi w instalatorze** (ekran 4) — wpa_supplicant/dhcpcd albo NetworkManager, zależnie od tego, co jest na live medium. Sieć trafia też do zainstalowanego systemu.
+- ✅ **Flatpak skonfigurowany, nie tylko zainstalowany** — remote Flathub, portal pod wybrane środowisko i `XDG_DATA_DIRS` (bez tego aplikacje nie pojawiały się w menu).
 - ✅ **Snapshoty btrfs** — snapper + grub-btrfs: godzinny timeline, sprzątanie, snapshoty widoczne w menu GRUB, `xbps-snapshot -Su` opakowuje aktualizację w parę snapshotów.
 - ✅ **Naprawione zamrożone menu GRUB przy Secure Boot** — podpisany standalone dostaje stub przekierowujący zamiast wkompilowanego menu (wcześniej nowe kernele znikały z listy startowej).
 - ✅ **Tryb Wayland-only** — instalacja bez `xorg-server` (zostaje Xwayland dla apek X11). Na KDE greeter SDDM przełączany na Wayland; na GNOME GDM zastępowany przez greetd+tuigreet, bo sam GDM ciągnie Xorg.
