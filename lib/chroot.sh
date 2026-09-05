@@ -101,6 +101,40 @@ copy_dns_info() {
     einfo "DNS configuration copied"
 }
 
+# drop_dns_info — remove the live medium's resolv.conf from the target
+#
+# The counterpart to copy_dns_info(). That one puts the live ISO's resolv.conf
+# into the chroot so XBPS can resolve names; without removing it, the installed
+# system boots with the DNS server of whatever network the install ran on frozen
+# in place (or the 8.8.8.8 that ensure_dns() adds). NetworkManager only rewrites
+# that file under some rc-manager settings, so the symptom is the confusing one:
+# the network is up, ping by IP works, by name it does not.
+#
+# Deliberately HERE and not in system_finalize(): that phase is gated by the
+# `finalize` checkpoint, while copy_dns_info runs unconditionally on EVERY entry
+# into the chroot phase. Pairing them across that boundary meant a resumed
+# install put the file back and nothing ever took it away again. Running it from
+# the caller also puts it after the after_finalize hook, which is documented in
+# README and may well need name resolution.
+drop_dns_info() {
+    einfo "Removing the live medium's resolv.conf from the target..."
+
+    if [[ "${DRY_RUN}" == "1" ]]; then
+        einfo "[DRY-RUN] Would remove ${MOUNTPOINT}/etc/resolv.conf"
+        return 0
+    fi
+
+    # If the networking phase was skipped (try() offers exactly that), nothing in
+    # the target will regenerate the file — then a frozen resolver beats none.
+    if [[ ! -d "${MOUNTPOINT}/etc/sv/NetworkManager" ]]; then
+        ewarn "NetworkManager not installed in the target — keeping resolv.conf, nothing would regenerate it"
+        return 0
+    fi
+
+    rm -f "${MOUNTPOINT}/etc/resolv.conf"
+    einfo "Removed — NetworkManager regenerates it on first boot"
+}
+
 # copy_installer_to_chroot — Copy the installer to chroot for re-invocation
 copy_installer_to_chroot() {
     einfo "Copying installer to chroot..."

@@ -244,25 +244,167 @@ system_create_users() {
         # Configure sudo
         try "Installing sudo" xbps-install -y sudo
 
-        if [[ -f /etc/sudoers ]]; then
-            # Ensure wheel group can sudo
-            sed -i 's/^# \(%wheel ALL=(ALL:ALL) ALL\)/\1/' /etc/sudoers 2>/dev/null || true
-            sed -i 's/^# \(%wheel ALL=(ALL) ALL\)/\1/' /etc/sudoers 2>/dev/null || true
+        if ! _configure_sudo_wheel; then
+            # With no root password (locked '*' from the ROOTFS) and no working
+            # sudo, nobody can administer — or in the worst case even log into —
+            # this machine. That is worth aborting for, not warning about.
+            if [[ -z "${ROOT_PASSWORD_HASH:-}" ]]; then
+                die "Could not grant sudo to the wheel group and root has no password — the installed system would be unadministrable."
+            fi
+            ewarn "Could not grant sudo to the wheel group — ${USERNAME} will have to su to root."
         fi
 
         einfo "User ${USERNAME} created with groups: ${groups}"
     fi
 }
 
+# _configure_sudo_wheel — grant sudo to the wheel group
+#
+# Used to be two `sed`s un-commenting the %wheel line in /etc/sudoers, both with
+# `|| true`. If upstream ever changes that comment (a space, a tab, a different
+# variant of the entry), neither pattern matches, `|| true` swallows it and the
+# user gets a system with NO sudo — discovered after the first boot, on a machine
+# whose root account ships locked.
+#
+# A drop-in is deterministic: it does not depend on the contents of a
+# package-managed file, and `visudo -cf` verifies the result. A syntax error in
+# sudoers locks sudo out for everyone, so the check is not optional.
+# SUDO_ROOT is empty in production; it exists so this is testable off a live machine.
+_configure_sudo_wheel() {
+    local root="${SUDO_ROOT:-}"
+    local sudoers="${root}/etc/sudoers"
+    local dropin="${root}/etc/sudoers.d/10-wheel"
+
+    # No /etc/sudoers at all means sudo is not installed — which happens for real:
+    # `try "Installing sudo"` can fail and the operator can choose "continue".
+    # Writing a drop-in then produces a file nothing will ever read, and the
+    # function would report success, defeating the die() gate below it.
+    if [[ ! -f "${sudoers}" ]]; then
+        eerror "${sudoers} does not exist — sudo is not installed, a drop-in would be dead weight"
+        return 1
+    fi
+
+    # The whole approach rests on one condition: /etc/sudoers must actually pull
+    # the directory in. Modern sudo writes `@includedir`, older ones `#includedir`
+    # — both are live directives, not comments.
+    if ! grep -Eq '^[[:space:]]*[#@]includedir[[:space:]]+/etc/sudoers\.d' "${sudoers}"; then
+        ewarn "/etc/sudoers does not include /etc/sudoers.d — falling back to editing it directly"
+        sed -i 's/^# \(%wheel ALL=(ALL:ALL) ALL\)/\1/' "${sudoers}" 2>/dev/null || true
+        sed -i 's/^# \(%wheel ALL=(ALL) ALL\)/\1/' "${sudoers}" 2>/dev/null || true
+        if grep -Eq '^[[:space:]]*%wheel[[:space:]]+ALL=' "${sudoers}"; then
+            einfo "Granted sudo to wheel (edited /etc/sudoers)"
+            return 0
+        fi
+        eerror "Could not enable sudo for the wheel group in ${sudoers#"${root}"}"
+        return 1
+    fi
+
+    mkdir -p "${root}/etc/sudoers.d" || return 1
+    printf '%%wheel ALL=(ALL:ALL) ALL\n' > "${dropin}" || return 1
+    chmod 0440 "${dropin}" || return 1
+
+    # visudo may be missing in a minimal chroot — that is a reason to skip the
+    # check, not to undo a drop-in whose content we control and know is valid.
+    if command -v visudo >/dev/null 2>&1; then
+        if ! visudo -cf "${dropin}" >/dev/null 2>&1; then
+            rm -f "${dropin}"
+            eerror "visudo rejected ${dropin#"${root}"} — removed it rather than risk locking sudo out"
+            return 1
+        fi
+    else
+        ewarn "visudo not available — ${dropin#"${root}"} written without syntax verification"
+    fi
+
+    einfo "Granted sudo to wheel (${dropin#"${root}"}, mode 0440)"
+    return 0
+}
+
+# Services whose absence leaves the installed system unusable rather than merely
+# degraded: no device nodes (udevd), no text console to log in on (agetty-tty1),
+# no session bus or seat management (dbus/elogind), no graphical login (the DMs).
+# For these a failed `ln` aborts the install — the alternative is that the user
+# finds out after the reboot, on a machine they cannot log into.
+_CRITICAL_SERVICES="udevd dbus elogind agetty-tty1 sddm gdm greetd"
+
+# _service_not_enabled — record a service that did not get enabled
+#
+# CONTRACT: this returns 0 for anything not on the critical list, and callers
+# rely on that. install.sh runs under `set -Eeuo pipefail` with inherit_errexit
+# and every one of the ~22 call sites is a BARE command, so a non-zero return
+# from _enable_service kills the whole installer mid-chroot. That is not
+# hypothetical: `try()` offers "skip this step and continue", and a skipped
+# `xbps-install` leaves /etc/sv/<service> missing a few lines later — which used
+# to be a warning and would have become an abort after the bootloader phase,
+# with the target still mounted and system_finalize never run.
+#
+# The point of verifying the symlink was to stop failures being INVISIBLE, not
+# to make them fatal. So the signal goes where the installer already collects
+# "this step did not happen": SKIPPED_LOG, which run_post_install surfaces to
+# the user at the end.
+_service_not_enabled() {
+    local service="$1" reason="$2"
+
+    if [[ " ${_CRITICAL_SERVICES} " == *" ${service} "* ]]; then
+        die "Failed to enable critical service: ${service} — ${reason}. The installed system would come up without it."
+    fi
+
+    ewarn "Service NOT enabled: ${service} — ${reason}"
+    { printf '%s\t%s\tcmd: %s\n' \
+        "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo '?')" \
+        "Enabling runit service ${service}" "_enable_service ${service}" \
+        >> "${SKIPPED_LOG}"; } 2>/dev/null || true
+    return 0
+}
+
 # _enable_service — Enable a runit service
+#
+# Verifies that the symlink actually appeared AND points where it should. It used
+# to just `ln … || true` and log "Enabled" unconditionally, so a failure was
+# indistinguishable from success: the install log claimed every service was on
+# while the system came up without a display manager. SERVICE_ROOT exists to make
+# that path testable off a live machine; it is empty in production, so the paths
+# stay absolute as before.
+#
+# Returns 0 for a non-critical failure ON PURPOSE — see _service_not_enabled.
 _enable_service() {
     local service="$1"
-    if [[ -d "/etc/sv/${service}" ]]; then
-        ln -sf "/etc/sv/${service}" "/var/service/${service}" 2>/dev/null || true
-        einfo "Enabled runit service: ${service}"
-    else
-        ewarn "Service not found: ${service}"
+    local root="${SERVICE_ROOT:-}"
+
+    if [[ ! -d "${root}/etc/sv/${service}" ]]; then
+        _service_not_enabled "${service}" "no /etc/sv/${service} (package not installed?)"
+        return 0
     fi
+
+    # /var/service is only a pointer: symlink → /etc/runit/runsvdir/current →
+    # default. Both links are created by the runit-void INSTALL script at
+    # post-install time — the void-packages template deletes them at build time
+    # on purpose ("Enable services at post-install time instead"). So inside a
+    # chroot where xbps-reconfigure has not run yet, /var/service is a DANGLING
+    # symlink and `ln` into it fails. Fall back to the physical directory, which
+    # is what the official Void installer links into anyway.
+    local svcdir="${root}/var/service"
+    if [[ ! -d "${svcdir}/" ]]; then
+        svcdir="${root}/etc/runit/runsvdir/default"
+        mkdir -p "${svcdir}" 2>/dev/null || true
+    fi
+
+    # -n is not optional. runit-void enables agetty-tty1..6 and udevd itself, so
+    # by the time system_finalize re-enables them the target is ALREADY a symlink
+    # to a directory — and plain `ln -sf` dereferences it, creating a
+    # self-referential /etc/sv/agetty-tty1/agetty-tty1 inside the service dir
+    # instead of refreshing the link. The old `-L` check would still have seen
+    # the pre-existing link and reported success.
+    ln -sfn "/etc/sv/${service}" "${svcdir}/${service}" 2>/dev/null || true
+
+    # Check the TARGET, not just that something is there — see above.
+    if [[ -L "${svcdir}/${service}" ]] &&
+       [[ "$(readlink "${svcdir}/${service}" 2>/dev/null)" == "/etc/sv/${service}" ]]; then
+        einfo "Enabled runit service: ${service} (${svcdir#"${root}"})"
+        return 0
+    fi
+
+    _service_not_enabled "${service}" "could not create ${svcdir#"${root}"}/${service}"
+    return 0
 }
 
 # install_power_management — Laptop power management (battery-gated).

@@ -33,6 +33,28 @@ assert_eq() {
     fi
 }
 
+assert_true() {
+    local desc="$1"; shift
+    if "$@"; then
+        echo "  PASS: ${desc}"
+        (( PASS++ )) || true
+    else
+        echo "  FAIL: ${desc}"
+        (( FAIL++ )) || true
+    fi
+}
+
+assert_false() {
+    local desc="$1"; shift
+    if "$@"; then
+        echo "  FAIL: ${desc}"
+        (( FAIL++ )) || true
+    else
+        echo "  PASS: ${desc}"
+        (( PASS++ )) || true
+    fi
+}
+
 assert_contains() {
     local desc="$1" needle="$2" haystack="$3"
     if [[ "${haystack}" == *"${needle}"* ]]; then
@@ -126,6 +148,103 @@ assert_eq "Dry-run succeeds" "0" "$?"
 
 # Cleanup
 rm -f "${LOG_FILE}"
+
+echo ""
+echo "=== wait_for_block_device: wait for udev instead of guessing (Forgejo #19) ==="
+
+# A path that will never become a block device must fail — and fail within the
+# timeout, not hang. The point of the helper is that the caller can abort.
+start=$(date +%s)
+rc=0
+wait_for_block_device "/nonexistent/void-test-device" 2 || rc=$?
+elapsed=$(( $(date +%s) - start ))
+assert_eq "missing device reports failure" "1" "${rc}"
+# Both bounds matter: too long is a hang, too short means the loop is not
+# actually waiting — which is how the first version of this helper was broken
+# (udevadm settle returned instantly and the timeout became decorative).
+assert_true "actually waits for the timeout (took ${elapsed}s, expected >= 2)" \
+    test "${elapsed}" -ge 2
+assert_true "does not overshoot the timeout (took ${elapsed}s, budget 2s + slack)" \
+    test "${elapsed}" -le 8
+
+# An empty argument is a no-op, not a two-second stall: the caller passes
+# optional partitions (SWAP, LUKS) that may simply not be part of the plan.
+rc=0
+wait_for_block_device "" || rc=$?
+assert_eq "empty device is a no-op" "0" "${rc}"
+
+# Positive case against a real node, when the machine running the tests has one.
+real_dev=$(lsblk -dpno NAME 2>/dev/null | head -1 || true)
+if [[ -n "${real_dev}" && -b "${real_dev}" ]]; then
+    rc=0
+    wait_for_block_device "${real_dev}" 2 || rc=$?
+    assert_eq "existing device returns immediately (${real_dev})" "0" "${rc}"
+else
+    echo "  SKIP: no block device available to test the positive path"
+fi
+
+# Which partitions are actually waited for — asserted on BEHAVIOUR, not with a
+# grep over `declare -f`. Review demonstrated the grep version passed after the
+# loop was narrowed to the ESP alone, i.e. against the exact regression it
+# guards: mkfs.ext4 or cryptsetup luksFormat hitting a node udev has not created.
+_waited=()
+wait_for_block_device() { _waited+=("$1"); [[ "$1" != "${_MISSING_DEV:-}" ]]; }
+die() { echo "DIED: $*"; return 1; }
+
+ESP_PARTITION=/dev/sda1
+BOOT_PARTITION=/dev/sda2
+ROOT_PARTITION=/dev/sda3
+SWAP_PARTITION=/dev/sda4
+LUKS_PARTITION=/dev/sda5
+PARTITION_SCHEME=auto
+_MISSING_DEV=""
+_wait_for_planned_partitions >/dev/null 2>&1
+assert_eq "waits for EVERY planned partition, not just the ESP" \
+    "/dev/sda1 /dev/sda2 /dev/sda3 /dev/sda4 /dev/sda5" "${_waited[*]}"
+
+# An optional partition that is not part of the plan must not be waited on.
+_waited=(); SWAP_PARTITION=""; LUKS_PARTITION=""
+_wait_for_planned_partitions >/dev/null 2>&1
+assert_eq "skips partitions the plan does not include" \
+    "/dev/sda1 /dev/sda2 /dev/sda3" "${_waited[*]}"
+
+# A node that never appears must abort — formatting a path that does not exist
+# is worse than a failed install.
+_waited=(); SWAP_PARTITION=/dev/sda4; LUKS_PARTITION=/dev/sda5
+_MISSING_DEV=/dev/sda3
+out=$(_wait_for_planned_partitions 2>&1) || true
+assert_contains "missing node aborts via die" "DIED:" "${out}"
+
+# ...except for the documented dual-boot case, where sfdisk --append may renumber
+# and the rescan below handles it.
+PARTITION_SCHEME=dual-boot
+out=$(_wait_for_planned_partitions 2>&1) || true
+assert_true "dual-boot root partition warns instead of dying" \
+    test -z "$(grep -o 'DIED:' <<< "${out}" || true)"
+
+# ...but a missing ESP is still fatal, even in dual-boot.
+_MISSING_DEV=/dev/sda1
+out=$(_wait_for_planned_partitions 2>&1) || true
+assert_contains "dual-boot exception does NOT extend to the ESP" "DIED:" "${out}"
+
+unset -f wait_for_block_device die
+_MISSING_DEV=""
+
+# The wait has to happen INSIDE the action loop, right after sfdisk — not once
+# the whole plan has run. mkfs.vfat / cryptsetup luksFormat are entries in that
+# same DISK_ACTIONS list, so a check that runs after the loop arrives after the
+# formatting it exists to protect (this is what the original fix got wrong, and
+# what the `sleep 2` before it got wrong too).
+exec_fn=$(declare -f disk_execute_plan)
+sfdisk_gate=$(grep -n 'sfdisk\*' <<< "${exec_fn}" | head -1 | cut -d: -f1 || true)
+first_wait=$(grep -n '_wait_for_planned_partitions' <<< "${exec_fn}" | head -1 | cut -d: -f1 || true)
+wait_count=$(grep -c '_wait_for_planned_partitions' <<< "${exec_fn}" || true)
+assert_true "there is a wait gated on the partition-table write" \
+    test -n "${sfdisk_gate}"
+assert_true "that gate comes BEFORE the first wait (i.e. inside the action loop)" \
+    test "${sfdisk_gate}" -lt "${first_wait}"
+assert_eq "and a second pass after the loop, for dual-boot renumbering" "2" "${wait_count}"
+
 
 echo ""
 echo "=== Results ==="

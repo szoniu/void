@@ -224,6 +224,10 @@ _run_chroot_with_live_output() {
 
     chroot_setup
     run_chroot_phase
+    # Symmetrical to copy_dns_info above, and outside the `finalize` checkpoint on
+    # purpose — a resumed install re-copies resolv.conf, so removing it from a
+    # checkpointed phase left it behind. Also runs after the after_finalize hook.
+    drop_dns_info
     chroot_teardown
 
     unset LIVE_OUTPUT
