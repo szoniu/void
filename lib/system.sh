@@ -104,6 +104,76 @@ system_set_keymap() {
     echo "KEYMAP=${keymap}" > /etc/vconsole.conf
 
     einfo "Keymap set to ${keymap}"
+
+    system_set_console_font
+}
+
+# _rc_conf_set — set KEY="value" in /etc/rc.conf, anchored
+#
+# Same shape as the KEYMAP handling above: replace an existing line or append
+# one. Anchored on ^KEY= so a partial name cannot match a different setting.
+_rc_conf_set() {
+    local root="${CONSOLE_ROOT:-}"
+    local rc="${root}/etc/rc.conf"
+    local key="$1" value="$2"
+
+    if [[ -f "${rc}" ]] && grep -q "^${key}=" "${rc}"; then
+        sed -i "s|^${key}=.*|${key}=\"${value}\"|" "${rc}"
+    else
+        mkdir -p "${root}/etc"
+        printf '%s="%s"\n' "${key}" "${value}" >> "${rc}"
+    fi
+}
+
+# system_set_console_font — console font via FONT= in /etc/rc.conf
+#
+# Void reads FONT= from the same file as KEYMAP. On a 4K/Retina panel — every
+# MacBook this installer supports, among others — the default VGA font is
+# effectively unreadable, and that is precisely the screen you end up on when
+# the graphical session refuses to start.
+#
+# Empty CONSOLE_FONT means "leave it alone", which is the behaviour before this
+# existed, so nothing changes for anyone who does not ask for it.
+system_set_console_font() {
+    local root="${CONSOLE_ROOT:-}"
+    local font="${CONSOLE_FONT:-}"
+
+    [[ -z "${font}" ]] && return 0
+
+    # The name reaches compgen -G as a GLOB and sed as a replacement, and it can
+    # arrive from a hand-edited preset or an inferred --resume config, not only
+    # from the TUI list. `ter-v*` would then match a face on disk, pass
+    # validation, and be written to rc.conf verbatim — where it means nothing.
+    if [[ ! "${font}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        ewarn "Console font name '${font}' contains unexpected characters — ignoring"
+        return 0
+    fi
+
+    # terminus-font ships the ter-* faces; verified present in the Void index
+    # (terminus-font 4.49.1). Without the package the name in rc.conf would
+    # point at nothing.
+    if [[ ! -d "${root}/usr/share/kbd/consolefonts" ]] ||
+       ! compgen -G "${root}/usr/share/kbd/consolefonts/${font}.*" >/dev/null 2>&1; then
+        # NOT through try(): under --non-interactive try() calls die() on failure,
+        # so a transient mirror error while fetching a COSMETIC package would
+        # abort the whole install. The validation below already handles "the face
+        # is not there" gracefully, which is the same outcome — minus the abort.
+        xbps-install -y terminus-font >>"${LOG_FILE:-/dev/null}" 2>&1 ||
+            ewarn "Could not install terminus-font — continuing without a custom console font"
+    fi
+
+    # Validate against the TARGET system, not the live medium — the font list in
+    # the TUI is hard-coded (the live ISO cannot see what the install will have),
+    # so this is the first point where the name can actually be checked. A bad
+    # FONT= is not fatal at boot, but it silently leaves the console unreadable,
+    # which is the exact thing this is meant to fix.
+    if ! compgen -G "${root}/usr/share/kbd/consolefonts/${font}.*" >/dev/null 2>&1; then
+        ewarn "Console font '${font}' not found in the target — leaving FONT unset"
+        return 0
+    fi
+
+    _rc_conf_set FONT "${font}"
+    einfo "Console font set to ${font}"
 }
 
 # generate_fstab — Generate /etc/fstab
@@ -405,6 +475,152 @@ _enable_service() {
 
     _service_not_enabled "${service}" "could not create ${svcdir#"${root}"}/${service}"
     return 0
+}
+
+# _ensure_cronie — cronie plus its runit service, idempotently
+#
+# Two things now need the same scheduler: snapper (timeline + cleanup) and the
+# weekly fstrim below. cronie used to arrive only via the snapper path, so an
+# install with snapshots disabled had nothing to run a periodic job with —
+# which is exactly the case where TRIM still matters.
+_ensure_cronie() {
+    local root="${TRIM_ROOT:-}"
+
+    # Check for the SERVICE directory, not for a `crond` binary. Void ships the
+    # daemon as /usr/bin/cronie-crond and creates `crond` through
+    # xbps-alternatives at package-configure time, so `command -v crond` can be
+    # false inside a chroot where the package is installed but not yet
+    # reconfigured — and false the other way round on a live medium that has its
+    # own cron. /etc/sv/cronie is what _enable_service actually needs.
+    if [[ ! -d "${root}/etc/sv/cronie" ]]; then
+        # NOT through try(): under --non-interactive try() calls die(), and this
+        # runs on the install path where an abort costs far more than a missing
+        # maintenance job. A failed fetch degrades to "no periodic TRIM", loudly.
+        xbps-install -y cronie >>"${LOG_FILE:-/dev/null}" 2>&1 || {
+            ewarn "Could not install cronie — periodic jobs (TRIM, snapshot cleanup) will not run"
+            return 0
+        }
+    fi
+    _enable_service "cronie"
+}
+
+# _anacron_allow_on_battery — let weekly jobs run when unplugged
+#
+# /etc/cron.weekly on Void is driven by ANACRON, not cron directly: the cronie
+# package builds with --enable-anacron and ships /etc/cron.hourly/0anacron, which
+# runs `anacron -s` — and that script exits early when the machine is on battery
+# unless ANACRON_RUN_ON_BATTERY_POWER=yes. Void's /etc/default/anacron ships that
+# line COMMENTED OUT, so the default is "skip on battery".
+#
+# This installer targets laptops (MacBooks, GPD/UMPC, Surface). A laptop that
+# mostly runs unplugged would therefore never trim, while the installer cheerfully
+# logged "Weekly TRIM scheduled" — a second silent no-op next to the LUKS one.
+# fstrim on an idle SSD costs a few seconds and negligible power, so enabling this
+# is the right trade for maintenance work. It also affects the daily snapper
+# cleanup, which wants to run for exactly the same reason.
+_anacron_allow_on_battery() {
+    local root="${TRIM_ROOT:-}"
+    local conf="${root}/etc/default/anacron"
+
+    [[ -f "${conf}" ]] || return 0
+
+    if grep -qE '^[[:space:]]*ANACRON_RUN_ON_BATTERY_POWER=' "${conf}"; then
+        sed -i 's|^[[:space:]]*ANACRON_RUN_ON_BATTERY_POWER=.*|ANACRON_RUN_ON_BATTERY_POWER=yes|' "${conf}"
+    else
+        printf '\n# Set by the Void installer: without this, anacron skips cron.weekly\n' >> "${conf}"
+        printf '# (and cron.daily) whenever the machine is on battery — on a laptop that\n' >> "${conf}"
+        printf '# means periodic TRIM and snapshot cleanup would effectively never run.\n' >> "${conf}"
+        printf 'ANACRON_RUN_ON_BATTERY_POWER=yes\n' >> "${conf}"
+    fi
+    einfo "  anacron: weekly jobs allowed on battery power"
+}
+
+# _disk_is_rotational — true for a spinning disk
+#
+# Returns 1 (not rotational) when the answer is unknown as well. That is the
+# deliberate direction: `fstrim -av` skips filesystems whose device does not
+# support discard, so scheduling it on a device we cannot classify costs
+# nothing, while NOT scheduling it on an unusual storage stack (dm, md, virtio,
+# an NVMe behind a controller that hides the attribute) would silently drop TRIM
+# on the machines most likely to need it.
+_disk_is_rotational() {
+    local disk="$1"
+    local root="${TRIM_ROOT:-}"
+    local name attr
+
+    name="$(basename "${disk}")"
+    attr="${root}/sys/block/${name}/queue/rotational"
+
+    [[ -r "${attr}" ]] || return 1
+    [[ "$(cat "${attr}" 2>/dev/null)" == "1" ]]
+}
+
+# setup_periodic_trim — weekly fstrim for SSDs
+#
+# systemd has fstrim.timer; runit has no equivalent, so without this TRIM never
+# runs at all on our installs. On an SSD that means write performance degrading
+# over time and cells wearing out faster.
+#
+# cron.weekly rather than `discard=async` in the mount options, deliberately:
+# one script covers every filesystem (btrfs, ext4, xfs) instead of btrfs only,
+# a weekly batch cannot stall I/O the way continuous discard does on cheap SSDs
+# with poor firmware, and it plugs into the scheduler this repo already builds
+# for snapper. `ssd` and `space_cache=v2` from the same source were considered
+# and rejected: the first is autodetected, the second is the mkfs.btrfs default.
+setup_periodic_trim() {
+    local root="${TRIM_ROOT:-}"
+    local disk="${TARGET_DISK:-}"
+
+    if [[ -z "${disk}" ]]; then
+        ewarn "No target disk known — skipping periodic TRIM setup"
+        return 0
+    fi
+
+    if _disk_is_rotational "${disk}"; then
+        einfo "Skipping periodic TRIM: ${disk} is a rotational disk"
+        return 0
+    fi
+
+    _ensure_cronie
+    _anacron_allow_on_battery
+
+    mkdir -p "${root}/etc/cron.weekly"
+    cat > "${root}/etc/cron.weekly/fstrim" << 'EOF'
+#!/bin/sh
+# Weekly TRIM — installed by the Void installer.
+# runit has no fstrim.timer, so this is what keeps SSD write performance from
+# degrading. `-a` covers every mounted filesystem that supports discard.
+#
+# Explicit PATH rather than an absolute binary path: cron runs with a minimal
+# environment, and hardcoding /usr/sbin/fstrim would break silently on a layout
+# where it is not there. A cron job that cannot find its binary fails quietly.
+#
+# --quiet-unsupported (util-linux >= 2.31) suppresses "the discard operation is
+# not supported" for filesystems that cannot trim. Without it every unsupported
+# mount writes to stderr once a week, and cron mails that to a root account
+# nobody reads — noise that trains you to ignore cron mail.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+exec fstrim --quiet-unsupported -av
+EOF
+    chmod 0755 "${root}/etc/cron.weekly/fstrim"
+
+    einfo "Weekly TRIM scheduled (/etc/cron.weekly/fstrim)"
+
+    # On an encrypted install the job runs but trims almost nothing, and saying
+    # "scheduled" without this would be misleading. dm-crypt does not pass
+    # discard through unless the mapping is opened with allow-discards, and our
+    # crypttab writes a bare `luks` options field (lib/luks.sh). That default is
+    # upstream's and it is a SECURITY choice, not an oversight: discard through
+    # dm-crypt leaks which blocks are in use and can reveal the filesystem type
+    # through the encryption layer. Turning it on silently, from a commit about
+    # a cron job, would change the security profile of an encrypted install
+    # without the user knowing — so this warns and leaves the decision to them.
+    if [[ "${LUKS_ENABLED:-no}" == "yes" ]]; then
+        ewarn "LUKS is enabled: the weekly job will NOT trim the encrypted root."
+        ewarn "dm-crypt blocks discard unless /etc/crypttab carries the 'discard' option,"
+        ewarn "which leaks the used-block map through the encryption layer — your call."
+    fi
 }
 
 # install_power_management — Laptop power management (battery-gated).

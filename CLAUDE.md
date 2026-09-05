@@ -600,7 +600,7 @@ bash tests/test_system.sh        # Service enablement, sudo drop-in, chroot left
 bash tests/shellcheck.sh         # Static analysis / lint (needs shellcheck)
 ```
 
-All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 17 functional files (574 assertions) + `shellcheck.sh` (lints all 65 `.sh` files; needs `shellcheck` installed).
+All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 17 functional files (627 assertions) + `shellcheck.sh` (lints all 65 `.sh` files; needs `shellcheck` installed).
 
 ## Known patterns and pitfalls
 
@@ -613,6 +613,41 @@ All tests are standalone — they do not require root or hardware. They use `DRY
   then `ro`, looks for `/var/db/xbps` or `ID=void`); the `disks` phase in
   `tui/progress.sh` refuses `disk_execute_plan` when it says yes in resume mode
   and mounts instead. In Gentoo this nearly wiped a built system twice.
+- **The rescue console needs a readable font.** `CONSOLE_FONT` (empty = unchanged) writes
+  `FONT=` into `/etc/rc.conf` next to `KEYMAP`, installing `terminus-font` on demand.
+  The stock VGA face is unreadable on a 4K/Retina panel — which is exactly the screen
+  you land on when the graphical session will not start. `suggest_console_font()`
+  (`lib/hardware.sh`) scales the proposal off the internal panel's LONGEST EDGE and
+  falls back to a guess on `APPLE_DETECTED`. Longest edge, not width: UMPCs ship
+  natively PORTRAIT panels (1200x1920), so judging by width called the densest display
+  we support low-resolution and left it with the stock font; below 1920px it suggests nothing rather
+  than pull in a package for no gain. The TUI list is hard-coded on purpose (the live
+  medium cannot enumerate the TARGET's `/usr/share/kbd/consolefonts`), so the name is
+  validated in the chroot and skipped with a warning if absent — a `FONT=` pointing at
+  a missing face leaves the console broken, i.e. the failure this exists to prevent.
+- **runit has no `fstrim.timer`, so nothing trimmed SSDs at all.** `setup_periodic_trim()`
+  (`lib/system.sh`) writes `/etc/cron.weekly/fstrim` (`fstrim -av`, mode 0755) when the
+  target disk is non-rotational. Chosen over `discard=async` in the mount options: one
+  script covers btrfs/ext4/xfs instead of btrfs only, and a weekly batch cannot stall
+  I/O the way continuous discard does on cheap SSDs. An UNKNOWN device (dm/md/virtio,
+  no `queue/rotational`) is treated as non-rotational on purpose — `fstrim -av` skips
+  what cannot discard, so scheduling costs nothing while skipping would silently drop
+  TRIM on exactly the unusual storage stacks. `cronie` moved out of `snapper_setup` into
+  the shared `_ensure_cronie()`: it used to arrive only with snapshots, so an install
+  without them had no scheduler at all. On a LUKS install the job is still written but
+  WARNS that it will not trim the encrypted root — dm-crypt drops discard unless
+  crypttab carries `discard`, and that default is upstream's SECURITY choice (discard
+  leaks the used-block map through the encryption layer), not ours to flip silently
+  from a commit about a cron job. `/etc/cron.weekly` on Void runs through ANACRON, whose
+  `0anacron` skips everything ON BATTERY unless `ANACRON_RUN_ON_BATTERY_POWER=yes` — and
+  Void ships that line commented out, so on a laptop installer the job would never fire.
+  `_anacron_allow_on_battery()` opens that gate (it also un-blocks the daily snapper
+  cleanup, which wants it for the same reason). `_ensure_cronie()` detects the package by
+  `/etc/sv/cronie`, NOT by `command -v crond`: Void ships the daemon as `cronie-crond` and
+  creates `crond` via xbps-alternatives at configure time. `setup_periodic_trim` is called
+  LAST in the fstab phase because it is the only network step there — an abort before
+  `generate_fstab`/`luks_configure_system` would leave the target unbootable for the sake
+  of a maintenance job.
 - **A BitLocker partition is an INVISIBLE Windows install.** Windows 11 24H2
   encrypts by default on consumer machines, and an encrypted volume cannot be
   mounted and has no readable `/Windows/System32` — so `_detect_ntfs_on_partition()`

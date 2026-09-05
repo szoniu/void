@@ -25,6 +25,9 @@ source "${LIB_DIR}/utils.sh"
 source "${LIB_DIR}/dialog.sh"
 source "${LIB_DIR}/config.sh"
 source "${LIB_DIR}/chroot.sh"
+source "${DATA_DIR}/gpu_database.sh"
+source "${LIB_DIR}/hardware.sh"
+source "${LIB_DIR}/snapper.sh"
 source "${LIB_DIR}/system.sh"
 
 PASS=0
@@ -259,6 +262,355 @@ run_line=$(grep -n 'run_chroot_phase$' <<< "${prog}" | head -1 | cut -d: -f1)
 tear_line=$(grep -n 'chroot_teardown$' <<< "${prog}" | head -1 | cut -d: -f1)
 assert_true "runs after run_chroot_phase (hook keeps DNS)" test "${drop_line}" -gt "${run_line}"
 assert_true "runs before chroot_teardown (target still mounted)" test "${drop_line}" -lt "${tear_line}"
+
+echo ""
+echo "=== setup_periodic_trim: runit has no fstrim.timer (Forgejo #23) ==="
+
+# Stub the two things that would touch the real system. _ensure_cronie is
+# exercised separately below; here we only care about the cron job itself.
+_ensure_cronie() { CRONIE_CALLED=1; }
+
+# SSD: the job is written, executable, and runs fstrim across all filesystems.
+troot1="${TMP_ROOT}/trim-ssd"
+mkdir -p "${troot1}/sys/block/nvme0n1/queue"
+echo 0 > "${troot1}/sys/block/nvme0n1/queue/rotational"
+CRONIE_CALLED=0
+TRIM_ROOT="${troot1}" TARGET_DISK=/dev/nvme0n1 setup_periodic_trim >/dev/null 2>&1
+assert_true "cron job created for an SSD" test -f "${troot1}/etc/cron.weekly/fstrim"
+assert_true "cron job is executable (run-parts skips it otherwise)" \
+    test -x "${troot1}/etc/cron.weekly/fstrim"
+assert_eq "job mode is 0755" "755" \
+    "$(stat -c '%a' "${troot1}/etc/cron.weekly/fstrim" 2>/dev/null)"
+assert_true "trims every mounted filesystem, not just root" \
+    grep -qE 'fstrim .*-av' "${troot1}/etc/cron.weekly/fstrim"
+# Unsupported filesystems must not mail root once a week — that is how people
+# learn to ignore cron mail.
+assert_true "silences 'discard not supported' noise" \
+    grep -q -- '--quiet-unsupported' "${troot1}/etc/cron.weekly/fstrim"
+# No absolute binary path: cron runs with a minimal environment and a job that
+# cannot find its binary fails silently.
+assert_true "sets an explicit PATH instead of hardcoding the binary" \
+    grep -q '^PATH=' "${troot1}/etc/cron.weekly/fstrim"
+# Checked on the exec line only — the comment above it legitimately mentions the
+# path it is explaining why not to use.
+assert_false "the exec line does not hardcode a binary path" \
+    grep -qE '^exec +/' "${troot1}/etc/cron.weekly/fstrim"
+assert_eq "cronie ensured — nothing would run the job otherwise" "1" "${CRONIE_CALLED}"
+
+# Spinning disk: nothing scheduled. fstrim on an HDD is pointless work.
+troot2="${TMP_ROOT}/trim-hdd"
+mkdir -p "${troot2}/sys/block/sda/queue"
+echo 1 > "${troot2}/sys/block/sda/queue/rotational"
+CRONIE_CALLED=0
+TRIM_ROOT="${troot2}" TARGET_DISK=/dev/sda setup_periodic_trim >/dev/null 2>&1
+assert_false "no cron job for a rotational disk" test -e "${troot2}/etc/cron.weekly/fstrim"
+assert_eq "and cronie is not pulled in for nothing" "0" "${CRONIE_CALLED}"
+
+# Unknown device: schedule anyway. `fstrim -av` skips filesystems that cannot
+# discard, so this costs nothing — while skipping would silently drop TRIM on
+# dm/md/virtio stacks, i.e. the machines most likely to need it.
+troot3="${TMP_ROOT}/trim-unknown"
+mkdir -p "${troot3}/sys/block"
+CRONIE_CALLED=0
+TRIM_ROOT="${troot3}" TARGET_DISK=/dev/mapper/vg-root setup_periodic_trim >/dev/null 2>&1
+assert_true "unclassifiable device still gets TRIM" \
+    test -f "${troot3}/etc/cron.weekly/fstrim"
+
+# No target disk at all (a resume that lost its config): warn, do not crash.
+troot4="${TMP_ROOT}/trim-nodisk"
+mkdir -p "${troot4}"
+rc=0
+TRIM_ROOT="${troot4}" TARGET_DISK="" setup_periodic_trim >/dev/null 2>&1 || rc=$?
+assert_eq "missing TARGET_DISK is survivable" "0" "${rc}"
+assert_false "...and schedules nothing" test -e "${troot4}/etc/cron.weekly/fstrim"
+
+# NOT `unset -f`: bash has no function stack, so unsetting the stub drops the
+# real _ensure_cronie from lib/system.sh entirely, and every assertion below
+# would silently exercise a missing function. Re-source to restore it.
+source "${LIB_DIR}/system.sh"
+
+# LUKS: the job is still scheduled (the ESP and any unencrypted mount benefit),
+# but claiming "TRIM scheduled" without saying it will not touch the encrypted
+# root would be misleading. dm-crypt drops discard unless crypttab carries the
+# `discard` option — an upstream SECURITY default we do not silently override.
+troot5="${TMP_ROOT}/trim-luks"
+mkdir -p "${troot5}/sys/block/nvme0n1/queue"
+echo 0 > "${troot5}/sys/block/nvme0n1/queue/rotational"
+_ensure_cronie() { :; }
+luks_out=$(TRIM_ROOT="${troot5}" TARGET_DISK=/dev/nvme0n1 LUKS_ENABLED=yes \
+    setup_periodic_trim 2>&1 || true)
+assert_true "encrypted install still gets the job" \
+    test -f "${troot5}/etc/cron.weekly/fstrim"
+assert_true "...and is told it will not trim the encrypted root" \
+    grep -q 'LUKS' <<< "${luks_out}"
+
+troot6="${TMP_ROOT}/trim-noluks"
+mkdir -p "${troot6}/sys/block/nvme0n1/queue"
+echo 0 > "${troot6}/sys/block/nvme0n1/queue/rotational"
+noluks_out=$(TRIM_ROOT="${troot6}" TARGET_DISK=/dev/nvme0n1 LUKS_ENABLED=no \
+    setup_periodic_trim 2>&1 || true)
+assert_false "no LUKS warning on an unencrypted install" \
+    grep -q 'LUKS' <<< "${noluks_out}"
+# NOT `unset -f`: bash has no function stack, so unsetting the stub drops the
+# real _ensure_cronie from lib/system.sh entirely, and every assertion below
+# would silently exercise a missing function. Re-source to restore it.
+source "${LIB_DIR}/system.sh"
+
+# _ensure_cronie itself: an empty implementation used to pass the whole suite,
+# because everything around it was either stubbed or asserted with a grep
+# (verified by mutation — 58/58 and 35/35 with the body replaced by `:`).
+#
+# Each case runs in a SUBSHELL with its own PATH: the machine running the tests
+# may well have crond installed (this one does), so leaving the real PATH in
+# place would exercise the opposite branch while looking correct. Results come
+# back through a file because a subshell cannot export variables upwards — and
+# because printf/>> are builtins, they work with an empty PATH.
+_cronie_log="${TMP_ROOT}/cronie.log"
+
+# Presence is detected by the SERVICE DIRECTORY, not a `crond` binary: Void ships
+# the daemon as /usr/bin/cronie-crond and creates `crond` through
+# xbps-alternatives at configure time, so `command -v crond` is false in a chroot
+# where the package is installed but not yet reconfigured — and true on a live
+# medium that has its own cron. /etc/sv/cronie is what _enable_service needs.
+_run_ensure_cronie() {
+    local root="$1"
+    : > "${_cronie_log}"
+    (
+        xbps-install() { printf 'installed:%s\n' "$*" >> "${_cronie_log}"; return "${_XBPS_RC:-0}"; }
+        _enable_service() { printf 'enabled:%s\n' "$1" >> "${_cronie_log}"; return 0; }
+        TRIM_ROOT="${root}" _ensure_cronie
+    ) >/dev/null 2>&1 || true
+}
+
+croot_nocron="${TMP_ROOT}/cronie-absent"
+mkdir -p "${croot_nocron}/etc/sv"
+_run_ensure_cronie "${croot_nocron}"
+assert_true "installs cronie when /etc/sv/cronie is absent" \
+    grep -q '^installed:.*cronie' "${_cronie_log}"
+assert_true "and enables the service" grep -q '^enabled:cronie$' "${_cronie_log}"
+
+croot_cron="${TMP_ROOT}/cronie-present"
+mkdir -p "${croot_cron}/etc/sv/cronie"
+_run_ensure_cronie "${croot_cron}"
+assert_false "does not reinstall when the service is already there" \
+    grep -q '^installed:' "${_cronie_log}"
+assert_true "but still enables it (snapper and TRIM both call this)" \
+    grep -q '^enabled:cronie$' "${_cronie_log}"
+
+# A failed fetch must degrade to "no periodic jobs", not abort the install —
+# this runs on the install path, where an abort costs a bootable system.
+_XBPS_RC=1
+_run_ensure_cronie "${croot_nocron}"
+_XBPS_RC=0
+assert_false "failed cronie install does not enable a service that is not there" \
+    grep -q '^enabled:' "${_cronie_log}"
+
+# anacron gate: /etc/cron.weekly on Void is driven by anacron, whose 0anacron
+# skips everything on battery unless this is set — and Void ships the line
+# commented out. On a laptop installer that is a silent no-op.
+aroot="${TMP_ROOT}/anacron-commented"
+mkdir -p "${aroot}/etc/default"
+printf '# ANACRON_RUN_ON_BATTERY_POWER=no\n' > "${aroot}/etc/default/anacron"
+TRIM_ROOT="${aroot}" _anacron_allow_on_battery >/dev/null 2>&1
+assert_true "battery gate opened when the setting is commented out" \
+    grep -qE '^ANACRON_RUN_ON_BATTERY_POWER=yes$' "${aroot}/etc/default/anacron"
+
+aroot2="${TMP_ROOT}/anacron-set-no"
+mkdir -p "${aroot2}/etc/default"
+printf 'ANACRON_RUN_ON_BATTERY_POWER=no\n' > "${aroot2}/etc/default/anacron"
+TRIM_ROOT="${aroot2}" _anacron_allow_on_battery >/dev/null 2>&1
+assert_eq "an explicit 'no' is replaced, not duplicated" "1" \
+    "$(grep -c '^ANACRON_RUN_ON_BATTERY_POWER=' "${aroot2}/etc/default/anacron")"
+assert_true "...and set to yes" \
+    grep -qE '^ANACRON_RUN_ON_BATTERY_POWER=yes$' "${aroot2}/etc/default/anacron"
+
+aroot3="${TMP_ROOT}/anacron-missing"
+mkdir -p "${aroot3}/etc"
+rc=0
+TRIM_ROOT="${aroot3}" _anacron_allow_on_battery >/dev/null 2>&1 || rc=$?
+assert_eq "missing /etc/default/anacron is survivable" "0" "${rc}"
+
+# ...and the gate has to actually be opened from the TRIM path — a helper nobody
+# calls leaves the weekly job dead on every laptop that runs unplugged.
+assert_true "setup_periodic_trim opens the anacron battery gate" \
+    grep -q '_anacron_allow_on_battery' <<< "$(declare -f setup_periodic_trim)"
+
+# Wiring: a function nothing calls is a function that does nothing. install.sh is
+# the only caller, and no test looked at it.
+inst=$(cat "${SCRIPT_DIR}/install.sh")
+assert_true "install.sh calls setup_periodic_trim" \
+    grep -q 'setup_periodic_trim' <<< "${inst}"
+# ...and LAST in its phase. It is the only step there that hits the network, and
+# under --non-interactive a failed xbps-install aborts the installer: between
+# generate_fstab and luks_configure_system that would leave the target without
+# /etc/fstab or /etc/crypttab, i.e. unbootable, for the sake of a cron job.
+trim_line=$(grep -n 'setup_periodic_trim' <<< "${inst}" | head -1 | cut -d: -f1)
+fstab_line=$(grep -n 'generate_fstab' <<< "${inst}" | head -1 | cut -d: -f1)
+luks_line=$(grep -n 'luks_configure_system' <<< "${inst}" | head -1 | cut -d: -f1)
+assert_true "...after fstab is generated" test "${trim_line}" -gt "${fstab_line}"
+assert_true "...and after crypttab is written" test "${trim_line}" -gt "${luks_line}"
+
+# TRIM must not depend on snapshots being enabled — that was the whole point of
+# splitting cronie out of snapper_setup.
+assert_false "snapper no longer owns the cronie install" \
+    grep -q 'xbps-install -y snapper grub-btrfs cronie' <<< "$(declare -f snapper_setup)"
+assert_true "snapper goes through the shared helper" \
+    grep -q '_ensure_cronie' <<< "$(declare -f snapper_setup)"
+assert_true "and the TRIM path does too" \
+    grep -q '_ensure_cronie' <<< "$(declare -f setup_periodic_trim)"
+
+echo ""
+echo "=== console font: FONT= in /etc/rc.conf (Forgejo #21) ==="
+
+# Stub the COMMAND, not try(): asserting on the description passed to try() would
+# pass for any command at all. This also mirrors the real code, which no longer
+# goes through try() — under --non-interactive try() calls die(), so a transient
+# mirror error while fetching a cosmetic package would abort the whole install.
+xbps-install() {
+    XBPS_ARGS="${XBPS_ARGS:-}$*;"
+    [[ -n "${_FONTS_APPEAR:-}" ]] && mkdir -p "${_FONT_DIR}" && touch "${_FONT_DIR}/${_FONTS_APPEAR}.psf.gz"
+    return "${_XBPS_RC:-0}"
+}
+
+# Empty CONSOLE_FONT is the pre-existing behaviour: touch nothing at all.
+croot0="${TMP_ROOT}/font-unset"
+mkdir -p "${croot0}/etc"
+printf 'KEYMAP="pl"\n' > "${croot0}/etc/rc.conf"
+XBPS_ARGS=""
+CONSOLE_ROOT="${croot0}" CONSOLE_FONT="" system_set_console_font >/dev/null 2>&1
+assert_false "no FONT= written when the user kept the default" \
+    grep -q '^FONT=' "${croot0}/etc/rc.conf"
+# ...and it must return before doing ANY work. Without the early return the
+# function reaches the same end state by accident, but installs terminus-font on
+# the way — a package nobody asked for, on every install that kept the default.
+assert_eq "and nothing is installed for a font nobody asked for" "" "${XBPS_ARGS}"
+
+# Normal case: font present in the target, FONT= written, KEYMAP untouched.
+croot1="${TMP_ROOT}/font-ok"
+_FONT_DIR="${croot1}/usr/share/kbd/consolefonts"
+mkdir -p "${croot1}/etc" "${_FONT_DIR}"
+printf 'KEYMAP="pl"\n' > "${croot1}/etc/rc.conf"
+touch "${_FONT_DIR}/ter-v28n.psf.gz"
+CONSOLE_ROOT="${croot1}" CONSOLE_FONT="ter-v28n" system_set_console_font >/dev/null 2>&1
+assert_true "FONT= written to rc.conf" grep -q '^FONT="ter-v28n"$' "${croot1}/etc/rc.conf"
+assert_true "KEYMAP left alone" grep -q '^KEYMAP="pl"$' "${croot1}/etc/rc.conf"
+
+# Replacing an existing FONT= must not append a second line — two FONT= entries
+# would leave which one wins up to the shell that sources rc.conf.
+# The face has to exist first: without it the function correctly refuses, the
+# file keeps its single old FONT= line, and the "not duplicated" assertion would
+# pass for the wrong reason.
+touch "${_FONT_DIR}/ter-v20n.psf.gz"
+CONSOLE_ROOT="${croot1}" CONSOLE_FONT="ter-v20n" system_set_console_font >/dev/null 2>&1
+assert_eq "existing FONT= replaced, not duplicated" "1" \
+    "$(grep -c '^FONT=' "${croot1}/etc/rc.conf")"
+assert_true "new value took effect" grep -q '^FONT="ter-v20n"$' "${croot1}/etc/rc.conf"
+
+# The font is missing and the install does not provide it: warn and write
+# NOTHING. A FONT= pointing at a face that is not there leaves the rescue
+# console broken — the exact failure this feature exists to prevent.
+croot2="${TMP_ROOT}/font-missing"
+_FONT_DIR="${croot2}/usr/share/kbd/consolefonts"
+mkdir -p "${croot2}/etc"
+printf 'KEYMAP="pl"\n' > "${croot2}/etc/rc.conf"
+_FONTS_APPEAR=""
+XBPS_ARGS=""
+CONSOLE_ROOT="${croot2}" CONSOLE_FONT="ter-v99n" system_set_console_font >/dev/null 2>&1
+assert_false "no FONT= when the face is absent from the target" \
+    grep -q '^FONT=' "${croot2}/etc/rc.conf"
+assert_true "...and terminus-font was at least attempted" \
+    grep -q 'terminus-font' <<< "${XBPS_ARGS}"
+
+# A failed package fetch must NOT be fatal — it is a cosmetic font, and the
+# validation above already copes with the face being absent.
+croot2b="${TMP_ROOT}/font-installfail"
+_FONT_DIR="${croot2b}/usr/share/kbd/consolefonts"
+mkdir -p "${croot2b}/etc"
+printf 'KEYMAP="pl"\n' > "${croot2b}/etc/rc.conf"
+_XBPS_RC=1
+rc=0
+CONSOLE_ROOT="${croot2b}" CONSOLE_FONT="ter-v28n" NON_INTERACTIVE=1 \
+    system_set_console_font >/dev/null 2>&1 || rc=$?
+assert_eq "failed font install does not abort the installer" "0" "${rc}"
+_XBPS_RC=0
+
+# A font name is used as a glob and as a sed replacement, and can arrive from a
+# hand-edited preset — not just the TUI list.
+croot2c="${TMP_ROOT}/font-glob"
+_FONT_DIR="${croot2c}/usr/share/kbd/consolefonts"
+mkdir -p "${croot2c}/etc" "${_FONT_DIR}"
+printf 'KEYMAP="pl"\n' > "${croot2c}/etc/rc.conf"
+touch "${_FONT_DIR}/ter-v28n.psf.gz"
+CONSOLE_ROOT="${croot2c}" CONSOLE_FONT="ter-v*" system_set_console_font >/dev/null 2>&1
+assert_false "a glob pattern is rejected, not written to rc.conf" \
+    grep -q '^FONT=' "${croot2c}/etc/rc.conf"
+
+# Package missing but the install provides the face: proceed.
+croot3="${TMP_ROOT}/font-installed"
+_FONT_DIR="${croot3}/usr/share/kbd/consolefonts"
+mkdir -p "${croot3}/etc"
+printf 'KEYMAP="pl"\n' > "${croot3}/etc/rc.conf"
+_FONTS_APPEAR="ter-v32n"
+CONSOLE_ROOT="${croot3}" CONSOLE_FONT="ter-v32n" system_set_console_font >/dev/null 2>&1
+assert_true "font installed on demand then written" \
+    grep -q '^FONT="ter-v32n"$' "${croot3}/etc/rc.conf"
+_FONTS_APPEAR=""
+unset -f xbps-install
+
+# Suggestion scales with the panel — the whole point is the rescue console on a
+# HiDPI screen, so below 1920 we suggest nothing rather than install a package
+# for no reason.
+_mk_panel() {
+    local root="$1" conn="$2" mode="$3"
+    mkdir -p "${root}/sys/class/drm/card0-${conn}"
+    echo connected > "${root}/sys/class/drm/card0-${conn}/status"
+    echo "${mode}" > "${root}/sys/class/drm/card0-${conn}/modes"
+}
+
+proot1="${TMP_ROOT}/panel-4k"; _mk_panel "${proot1}" eDP-1 "3840x2160"
+assert_eq "4K panel suggests the largest face" "ter-v32n" \
+    "$(CONSOLE_ROOT="${proot1}" suggest_console_font)"
+
+proot2="${TMP_ROOT}/panel-1440"; _mk_panel "${proot2}" eDP-1 "2560x1600"
+assert_eq "1440p/Retina suggests 28" "ter-v28n" \
+    "$(CONSOLE_ROOT="${proot2}" suggest_console_font)"
+
+proot3="${TMP_ROOT}/panel-1080"; _mk_panel "${proot3}" eDP-1 "1920x1080"
+assert_eq "1080p suggests 20" "ter-v20n" \
+    "$(CONSOLE_ROOT="${proot3}" suggest_console_font)"
+
+# A PORTRAIT panel: UMPCs (GPD Pocket, MiniBook — hardware detect_umpc handles
+# explicitly) ship 1200x1920 screens. Judging by width alone calls the densest
+# display we support "low resolution" and suggests nothing, on exactly the
+# machine where the stock console font is least readable.
+proot3b="${TMP_ROOT}/panel-portrait"; _mk_panel "${proot3b}" DSI-1 "1200x1920"
+assert_eq "portrait UMPC panel is judged by its longest edge" "ter-v20n" \
+    "$(CONSOLE_ROOT="${proot3b}" suggest_console_font || true)"
+proot3c="${TMP_ROOT}/panel-portrait-4k"; _mk_panel "${proot3c}" DSI-1 "2160x3840"
+assert_eq "portrait 4K too" "ter-v32n" \
+    "$(CONSOLE_ROOT="${proot3c}" suggest_console_font || true)"
+
+proot4="${TMP_ROOT}/panel-small"; _mk_panel "${proot4}" eDP-1 "1366x768"
+assert_eq "a small panel suggests nothing" "" \
+    "$(CONSOLE_ROOT="${proot4}" suggest_console_font || true)"
+
+# A disconnected panel must not be read — an unplugged eDP still has a modes file.
+proot5="${TMP_ROOT}/panel-off"; _mk_panel "${proot5}" eDP-1 "3840x2160"
+echo disconnected > "${proot5}/sys/class/drm/card0-eDP-1/status"
+assert_eq "disconnected panel is ignored" "" \
+    "$(CONSOLE_ROOT="${proot5}" APPLE_DETECTED=0 suggest_console_font || true)"
+
+# No panel data at all (VM, headless, a connector the kernel hides): a Mac is
+# still worth guessing for, since every supported model has a Retina panel.
+proot6="${TMP_ROOT}/panel-none"; mkdir -p "${proot6}/sys/class/drm"
+assert_eq "Apple with no panel data still gets a readable font" "ter-v28n" \
+    "$(CONSOLE_ROOT="${proot6}" APPLE_DETECTED=1 suggest_console_font || true)"
+assert_eq "non-Apple with no panel data gets no suggestion" "" \
+    "$(CONSOLE_ROOT="${proot6}" APPLE_DETECTED=0 suggest_console_font || true)"
+
+# Wiring: the font has to be applied where the keymap is, or nothing calls it.
+assert_true "system_set_keymap applies the console font too" \
+    grep -q 'system_set_console_font' <<< "$(declare -f system_set_keymap)"
 
 rm -f "${LOG_FILE}"
 

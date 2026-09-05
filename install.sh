@@ -299,6 +299,11 @@ _do_chroot_phases() {
         # crypttab + dracut + keyfile: after the kernel (dracut needs modules),
         # before the bootloader (GRUB config reads the LUKS UUID).
         luks_configure_system
+        # LAST in this phase, deliberately: it is the only step here that hits the
+        # network (xbps-install cronie), and an abort between generate_fstab and
+        # luks_configure_system would leave the target without /etc/fstab or
+        # /etc/crypttab — i.e. unbootable — for the sake of a maintenance job.
+        setup_periodic_trim
         maybe_exec 'after_fstab'
         checkpoint_set "fstab"
     else

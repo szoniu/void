@@ -276,6 +276,69 @@ _umpc_internal_panel_connector() {
     return 1
 }
 
+# _internal_panel_longest_edge — the internal panel's longest edge, in pixels
+#
+# Deliberately separate from _umpc_internal_panel_connector() above: that one
+# answers a different question (is the panel PORTRAIT, and on which connector),
+# and folding the two would mean touching the UMPC rotation path for a cosmetic
+# feature. Same /sys/class/drm source and same "first line of modes is the
+# preferred one" assumption.
+_internal_panel_longest_edge() {
+    local root="${CONSOLE_ROOT:-}"
+    local c status modes w h
+    for c in "${root}"/sys/class/drm/card*-eDP-* "${root}"/sys/class/drm/card*-DSI-* "${root}"/sys/class/drm/card*-LVDS-*; do
+        [[ -d "${c}" && -f "${c}/status" && -f "${c}/modes" ]] || continue
+        # `|| [[ -n ... ]]`: read returns non-zero on a final line with no
+        # trailing newline. sysfs always terminates, but a one-character guard is
+        # cheaper than a silent "no panel detected" if that ever stops holding.
+        read -r status < "${c}/status" 2>/dev/null || [[ -n "${status}" ]] || continue
+        [[ "${status}" == "connected" ]] || continue
+        read -r modes < "${c}/modes" 2>/dev/null || [[ -n "${modes}" ]] || continue
+
+        w="${modes%%x*}"
+        h="${modes#*x}"; h="${h%%[^0-9]*}"
+        [[ "${w}" =~ ^[0-9]+$ && "${h}" =~ ^[0-9]+$ ]] || continue
+
+        # The LONGER edge, not the width. UMPCs (GPD Pocket, MiniBook — hardware
+        # this installer explicitly supports, see detect_umpc) ship panels whose
+        # native orientation is PORTRAIT: a 1200x1920 screen reports width 1200
+        # and would be judged low-resolution, when it is in fact the densest
+        # display we handle and the one where the stock console font is worst.
+        if (( h > w )); then
+            echo "${h}"
+        else
+            echo "${w}"
+        fi
+        return 0
+    done
+    return 1
+}
+
+# suggest_console_font — a readable default for this panel, or empty
+#
+# The point of the feature is the rescue console on a HiDPI screen, so the
+# suggestion scales with the panel's horizontal resolution. Below 1920 the
+# stock VGA font is fine and we suggest nothing — an unnecessary terminus-font
+# install is not an improvement.
+suggest_console_font() {
+    local width=""
+    width="$(_internal_panel_longest_edge 2>/dev/null)" || width=""
+
+    if [[ -z "${width}" ]]; then
+        # No panel data (headless, VM, a connector the kernel does not expose).
+        # A Mac is worth guessing for anyway: every model this installer
+        # supports has a Retina panel.
+        [[ "${APPLE_DETECTED:-0}" == "1" ]] && { echo "ter-v28n"; return 0; }
+        return 1
+    fi
+
+    if   (( width >= 3200 )); then echo "ter-v32n"
+    elif (( width >= 2560 )); then echo "ter-v28n"
+    elif (( width >= 1920 )); then echo "ter-v20n"
+    else return 1
+    fi
+}
+
 detect_umpc() {
     UMPC_DETECTED=0
     UMPC_VENDOR=""
