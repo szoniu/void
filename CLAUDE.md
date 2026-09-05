@@ -600,7 +600,7 @@ bash tests/test_system.sh        # Service enablement, sudo drop-in, chroot left
 bash tests/shellcheck.sh         # Static analysis / lint (needs shellcheck)
 ```
 
-All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 17 functional files (604 assertions) + `shellcheck.sh` (lints all 65 `.sh` files; needs `shellcheck` installed).
+All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 17 functional files (620 assertions) + `shellcheck.sh` (lints all 65 `.sh` files; needs `shellcheck` installed).
 
 ## Known patterns and pitfalls
 
@@ -617,8 +617,10 @@ All tests are standalone — they do not require root or hardware. They use `DRY
   `FONT=` into `/etc/rc.conf` next to `KEYMAP`, installing `terminus-font` on demand.
   The stock VGA face is unreadable on a 4K/Retina panel — which is exactly the screen
   you land on when the graphical session will not start. `suggest_console_font()`
-  (`lib/hardware.sh`) scales the proposal off the internal panel's preferred mode and
-  falls back to a guess on `APPLE_DETECTED`; below 1920px it suggests nothing rather
+  (`lib/hardware.sh`) scales the proposal off the internal panel's LONGEST EDGE and
+  falls back to a guess on `APPLE_DETECTED`. Longest edge, not width: UMPCs ship
+  natively PORTRAIT panels (1200x1920), so judging by width called the densest display
+  we support low-resolution and left it with the stock font; below 1920px it suggests nothing rather
   than pull in a package for no gain. The TUI list is hard-coded on purpose (the live
   medium cannot enumerate the TARGET's `/usr/share/kbd/consolefonts`), so the name is
   validated in the chroot and skipped with a warning if absent — a `FONT=` pointing at
@@ -632,7 +634,11 @@ All tests are standalone — they do not require root or hardware. They use `DRY
   what cannot discard, so scheduling costs nothing while skipping would silently drop
   TRIM on exactly the unusual storage stacks. `cronie` moved out of `snapper_setup` into
   the shared `_ensure_cronie()`: it used to arrive only with snapshots, so an install
-  without them had no scheduler at all.
+  without them had no scheduler at all. On a LUKS install the job is still written but
+  WARNS that it will not trim the encrypted root — dm-crypt drops discard unless
+  crypttab carries `discard`, and that default is upstream's SECURITY choice (discard
+  leaks the used-block map through the encryption layer), not ours to flip silently
+  from a commit about a cron job.
 - **A BitLocker partition is an INVISIBLE Windows install.** Windows 11 24H2
   encrypts by default on consumer machines, and an encrypted volume cannot be
   mounted and has no readable `/Windows/System32` — so `_detect_ntfs_on_partition()`
