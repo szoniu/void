@@ -244,14 +244,71 @@ system_create_users() {
         # Configure sudo
         try "Installing sudo" xbps-install -y sudo
 
-        if [[ -f /etc/sudoers ]]; then
-            # Ensure wheel group can sudo
-            sed -i 's/^# \(%wheel ALL=(ALL:ALL) ALL\)/\1/' /etc/sudoers 2>/dev/null || true
-            sed -i 's/^# \(%wheel ALL=(ALL) ALL\)/\1/' /etc/sudoers 2>/dev/null || true
+        if ! _configure_sudo_wheel; then
+            # With no root password (locked '*' from the ROOTFS) and no working
+            # sudo, nobody can administer — or in the worst case even log into —
+            # this machine. That is worth aborting for, not warning about.
+            if [[ -z "${ROOT_PASSWORD_HASH:-}" ]]; then
+                die "Could not grant sudo to the wheel group and root has no password — the installed system would be unadministrable."
+            fi
+            ewarn "Could not grant sudo to the wheel group — ${USERNAME} will have to su to root."
         fi
 
         einfo "User ${USERNAME} created with groups: ${groups}"
     fi
+}
+
+# _configure_sudo_wheel — grant sudo to the wheel group
+#
+# Used to be two `sed`s un-commenting the %wheel line in /etc/sudoers, both with
+# `|| true`. If upstream ever changes that comment (a space, a tab, a different
+# variant of the entry), neither pattern matches, `|| true` swallows it and the
+# user gets a system with NO sudo — discovered after the first boot, on a machine
+# whose root account ships locked.
+#
+# A drop-in is deterministic: it does not depend on the contents of a
+# package-managed file, and `visudo -cf` verifies the result. A syntax error in
+# sudoers locks sudo out for everyone, so the check is not optional.
+# SUDO_ROOT is empty in production; it exists so this is testable off a live machine.
+_configure_sudo_wheel() {
+    local root="${SUDO_ROOT:-}"
+    local sudoers="${root}/etc/sudoers"
+    local dropin="${root}/etc/sudoers.d/10-wheel"
+
+    # The whole approach rests on one condition: /etc/sudoers must actually pull
+    # the directory in. Modern sudo writes `@includedir`, older ones `#includedir`
+    # — both are live directives, not comments.
+    if [[ -f "${sudoers}" ]] && \
+       ! grep -Eq '^[[:space:]]*[#@]includedir[[:space:]]+/etc/sudoers\.d' "${sudoers}"; then
+        ewarn "/etc/sudoers does not include /etc/sudoers.d — falling back to editing it directly"
+        sed -i 's/^# \(%wheel ALL=(ALL:ALL) ALL\)/\1/' "${sudoers}" 2>/dev/null || true
+        sed -i 's/^# \(%wheel ALL=(ALL) ALL\)/\1/' "${sudoers}" 2>/dev/null || true
+        if grep -Eq '^[[:space:]]*%wheel[[:space:]]+ALL=' "${sudoers}"; then
+            einfo "Granted sudo to wheel (edited /etc/sudoers)"
+            return 0
+        fi
+        eerror "Could not enable sudo for the wheel group in ${sudoers#"${root}"}"
+        return 1
+    fi
+
+    mkdir -p "${root}/etc/sudoers.d" || return 1
+    printf '%%wheel ALL=(ALL:ALL) ALL\n' > "${dropin}" || return 1
+    chmod 0440 "${dropin}" || return 1
+
+    # visudo may be missing in a minimal chroot — that is a reason to skip the
+    # check, not to undo a drop-in whose content we control and know is valid.
+    if command -v visudo >/dev/null 2>&1; then
+        if ! visudo -cf "${dropin}" >/dev/null 2>&1; then
+            rm -f "${dropin}"
+            eerror "visudo rejected ${dropin#"${root}"} — removed it rather than risk locking sudo out"
+            return 1
+        fi
+    else
+        ewarn "visudo not available — ${dropin#"${root}"} written without syntax verification"
+    fi
+
+    einfo "Granted sudo to wheel (${dropin#"${root}"}, mode 0440)"
+    return 0
 }
 
 # Services whose absence leaves the installed system unusable rather than merely

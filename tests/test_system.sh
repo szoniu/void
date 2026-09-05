@@ -114,6 +114,50 @@ for svc in udevd dbus elogind agetty-tty1 sddm; do
         grep -q " ${svc} " <<< " ${_CRITICAL_SERVICES} "
 done
 
+echo ""
+echo "=== _configure_sudo_wheel: drop-in, verified, not a blind sed ==="
+
+# Case 1: normal Void layout — /etc/sudoers pulls in the directory.
+sroot1="${TMP_ROOT}/sudo-ok"
+mkdir -p "${sroot1}/etc"
+printf 'Defaults env_reset\n#includedir /etc/sudoers.d\n' > "${sroot1}/etc/sudoers"
+rc=0
+SUDO_ROOT="${sroot1}" _configure_sudo_wheel >/dev/null 2>&1 || rc=$?
+assert_eq "drop-in path succeeds" "0" "${rc}"
+assert_true "drop-in file created" test -f "${sroot1}/etc/sudoers.d/10-wheel"
+assert_eq "drop-in grants wheel" "%wheel ALL=(ALL:ALL) ALL" \
+    "$(cat "${sroot1}/etc/sudoers.d/10-wheel" 2>/dev/null)"
+assert_eq "drop-in mode is 0440" "440" \
+    "$(stat -c '%a' "${sroot1}/etc/sudoers.d/10-wheel" 2>/dev/null)"
+
+# Case 2: modern sudo writes @includedir, not #includedir — both are directives.
+sroot2="${TMP_ROOT}/sudo-at"
+mkdir -p "${sroot2}/etc"
+printf 'Defaults env_reset\n@includedir /etc/sudoers.d\n' > "${sroot2}/etc/sudoers"
+SUDO_ROOT="${sroot2}" _configure_sudo_wheel >/dev/null 2>&1
+assert_true "@includedir is recognised as an include, not a comment" \
+    test -f "${sroot2}/etc/sudoers.d/10-wheel"
+
+# Case 3: no includedir at all — fall back to editing /etc/sudoers, and only
+# report success if the %wheel line is actually active afterwards.
+sroot3="${TMP_ROOT}/sudo-noinc"
+mkdir -p "${sroot3}/etc"
+printf 'Defaults env_reset\n# %%wheel ALL=(ALL:ALL) ALL\n' > "${sroot3}/etc/sudoers"
+rc=0
+SUDO_ROOT="${sroot3}" _configure_sudo_wheel >/dev/null 2>&1 || rc=$?
+assert_eq "fallback path succeeds when the sed matches" "0" "${rc}"
+assert_true "%wheel line un-commented by the fallback" \
+    grep -Eq '^%wheel ALL=' "${sroot3}/etc/sudoers"
+
+# Case 4: the case the old code got wrong — no includedir AND a comment the sed
+# does not match. It used to swallow this and leave the user without sudo.
+sroot4="${TMP_ROOT}/sudo-nomatch"
+mkdir -p "${sroot4}/etc"
+printf 'Defaults env_reset\n#\t%%wheel ALL=(ALL:ALL) ALL\n' > "${sroot4}/etc/sudoers"
+rc=0
+SUDO_ROOT="${sroot4}" _configure_sudo_wheel >/dev/null 2>&1 || rc=$?
+assert_eq "unmatched sed pattern reports failure instead of silence" "1" "${rc}"
+
 rm -f "${LOG_FILE}"
 
 echo ""
