@@ -54,6 +54,19 @@ assert_not_contains() {
     fi
 }
 
+# _save_fn / _restore_fn — stub a library function and put the original back.
+#
+# Neither `unset -f` nor re-sourcing works here: the first DROPS the real
+# definition (bash keeps no stack of them), and lib/constants.sh marks values
+# like DIALOG_HEIGHT readonly, so a second `source lib/dialog.sh` aborts the
+# test file. Copying the body under another name is the only safe route.
+_save_fn() {
+    eval "_orig_$1() $(declare -f "$1" | tail -n +2)"
+}
+_restore_fn() {
+    eval "$1() $(declare -f "_orig_$1" | tail -n +2)"
+}
+
 # Common config for a plain auto-partition run
 _setup_config() {
     TARGET_DISK="/dev/sda"
@@ -179,7 +192,12 @@ ct_on=$(_crypttab_for "yes")
 assert_contains "crypttab carries the plain luks options field by default" \
     "none luks" "${ct_off}"
 assert_not_contains "…and no discard" "discard" "${ct_off}"
-assert_contains "crypttab carries discard when allowed" "luks,discard" "${ct_on}"
+# dracut's option loop matches `allow-discards`; systemd's `discard` spelling
+# falls through its case with no branch and is silently ignored, so the wrong
+# token would leave TRIM off with no error anywhere.
+assert_contains "crypttab carries allow-discards when allowed" "luks,allow-discards" "${ct_on}"
+assert_not_contains "…and not systemd's 'discard' spelling, which dracut ignores" \
+    "luks,discard" "${ct_on}"
 
 # Kernel cmdline — dracut reads this even when crypttab is not in the image
 get_uuid() { echo "1234abcd-5678-90ef-1234-567890abcdef"; }
@@ -193,37 +211,283 @@ assert_not_contains "cmdline has no allow-discards by default" \
 
 LUKS_ALLOW_DISCARDS="yes"
 cmdline=$(luks_grub_cmdline)
+# The valueless form on purpose: dracut compares the requested UUIDs against a
+# variable cryptroot-ask.sh never assigns, so the =<uuid> form can never match
+# and skips the valueless branch too — a silent no-op. Scope still comes from
+# rd.luks.uuid, which the same cmdline always carries.
 assert_contains "cmdline carries rd.luks.allow-discards when allowed" \
-    "rd.luks.allow-discards=1234abcd-5678-90ef-1234-567890abcdef" "${cmdline}"
-assert_contains "…alongside rd.luks.uuid" "rd.luks.uuid=1234abcd" "${cmdline}"
+    "rd.luks.allow-discards" "${cmdline}"
+assert_not_contains "…not the per-UUID form, which dracut cannot match" \
+    "rd.luks.allow-discards=" "${cmdline}"
+assert_contains "…alongside rd.luks.uuid, which limits it to this container" \
+    "rd.luks.uuid=1234abcd" "${cmdline}"
 unset -f get_uuid
 LUKS_ALLOW_DISCARDS="no"
 
-# The TUI question must not default to yes — this is a security trade-off.
-fs_screen=$(cat "${SCRIPT_DIR}/tui/filesystem_select.sh")
-assert_contains "the discard prompt asks with the selection on No" \
-    'defaultno' "${fs_screen}"
+# --- The TUI screen, tested by RESULT, not by grepping its source ---
+#
+# A grep for "defaultno" in the file passes even when the prompt is never
+# called and when the yes-branch is inverted — both of which silently restore
+# the pre-#25 behaviour. So drive the real screen function with a stubbed
+# dialog and assert on the variable it is supposed to produce.
+# TUI_NEXT/BACK/ABORT are readonly in lib/constants.sh — already sourced.
+TUI_DIR="${SCRIPT_DIR}/tui"
+source "${TUI_DIR}/filesystem_select.sh"
 
-# …and dialog_yesno must actually pass that through to the backend.
+_save_fn dialog_yesno
+_save_fn luks_prompt_passphrase
+luks_prompt_passphrase() { _LUKS_PASSPHRASE="pw"; return 0; }
+
+# Stub routes by title: the first question is encryption, the second is TRIM.
+_TRIM_ASKED=0
+_TRIM_DEFAULT_ARG=""
+dialog_yesno() {
+    local title="$1" default="${3:-}"
+    case "${title}" in
+        *"Encryption"*) return "${_ANS_LUKS:-0}" ;;
+        *"TRIM"*)
+            _TRIM_ASKED=1
+            _TRIM_DEFAULT_ARG="${default}"
+            return "${_ANS_TRIM:-1}"
+            ;;
+    esac
+    return 1
+}
+
+_run_luks_screen() {
+    PARTITION_SCHEME="${1:-auto}"
+    _TRIM_ASKED=0
+    _TRIM_DEFAULT_ARG=""
+    _screen_luks_prompt >/dev/null 2>&1
+}
+
+# user says yes to encryption, yes to TRIM
+LUKS_ALLOW_DISCARDS="no"; _ANS_LUKS=0; _ANS_TRIM=0
+_run_luks_screen auto
+assert_eq "screen asks about TRIM when encryption is on" "1" "${_TRIM_ASKED}"
+assert_eq "…and a yes answer reaches LUKS_ALLOW_DISCARDS" "yes" "${LUKS_ALLOW_DISCARDS}"
+assert_eq "…asked with the selection parked on No" "defaultno" "${_TRIM_DEFAULT_ARG}"
+
+# user says yes to encryption, no to TRIM
+LUKS_ALLOW_DISCARDS="yes"; _ANS_LUKS=0; _ANS_TRIM=1
+_run_luks_screen auto
+assert_eq "a no answer reaches LUKS_ALLOW_DISCARDS" "no" "${LUKS_ALLOW_DISCARDS}"
+
+# encryption declined — a stale yes from a preset must not survive, or
+# validate_config rejects the config on a screen the user cannot get back to
+LUKS_ALLOW_DISCARDS="yes"; _ANS_LUKS=1; _ANS_TRIM=0
+_run_luks_screen auto
+assert_eq "no TRIM question when encryption is declined" "0" "${_TRIM_ASKED}"
+assert_eq "…and a stale preset yes is cleared" "no" "${LUKS_ALLOW_DISCARDS}"
+assert_eq "…encryption itself stays off" "no" "${LUKS_ENABLED}"
+
+# a spinning disk: no cron job is ever written for it, so a "yes" would buy
+# nothing and the question must not be asked at all
+# `unset -f` is safe HERE and only here: this file never sources lib/system.sh,
+# so the stub has no library original to destroy (the screen guards the call
+# with `declare -F`, which is why every assertion above ran without it).
+_disk_is_rotational() { return 0; }
+LUKS_ALLOW_DISCARDS="yes"; _ANS_LUKS=0; _ANS_TRIM=0
+TARGET_DISK="/dev/sda"
+_run_luks_screen auto
+assert_eq "no TRIM question on a rotational disk" "0" "${_TRIM_ASKED}"
+assert_eq "…and the answer is forced to no" "no" "${LUKS_ALLOW_DISCARDS}"
+unset -f _disk_is_rotational
+assert_eq "the stub is gone again" "" "$(declare -F _disk_is_rotational || true)"
+
+# manual partitioning — the installer never creates this container
+LUKS_ALLOW_DISCARDS="yes"; _ANS_LUKS=0; _ANS_TRIM=0
+_run_luks_screen manual
+assert_eq "manual scheme asks nothing about TRIM" "0" "${_TRIM_ASKED}"
+assert_eq "…and clears a stale preset yes" "no" "${LUKS_ALLOW_DISCARDS}"
+
+_restore_fn dialog_yesno
+_restore_fn luks_prompt_passphrase
+PARTITION_SCHEME="auto"
+LUKS_ALLOW_DISCARDS="no"
+
+# dialog_yesno must pass the flag through to the dialog/whiptail backend…
 captured=""
+_save_fn dialog_yesno
 dialog() { captured="$*"; return 1; }
 DIALOG_CMD="dialog" dialog_yesno "T" "text" "defaultno" || true
 assert_contains "dialog_yesno forwards --defaultno" "--defaultno" "${captured}"
 captured=""
 DIALOG_CMD="dialog" dialog_yesno "T" "text" || true
 assert_not_contains "…and omits it otherwise" "--defaultno" "${captured}"
-unset -f dialog
+unset -f dialog   # a stub with no library original — safe to drop
+
+# …and to gum, which is the DEFAULT backend on the live medium (bundled in
+# data/gum.tar.gz, first in the detection order) — there the default answer is
+# expressed as the order of the choices, so it needs its own assertion.
+if [[ -c /dev/tty ]]; then
+    # The stub runs inside $( … ), so it captures to a FILE — a variable
+    # assigned in that subshell never reaches this one (which is exactly how
+    # the first version of this assertion managed to compare empty to empty).
+    gum_capture="$(mktemp)"
+    _save_fn _gum_backtitle
+    _save_fn _gum_style_box
+    _save_fn _gum_drain_tty
+    gum() { cat > "${gum_capture}"; echo "No"; }
+    _gum_backtitle() { :; }
+    _gum_style_box() { :; }
+    _gum_drain_tty() { :; }
+
+    : > "${gum_capture}"
+    DIALOG_CMD="gum" dialog_yesno "T" "text" "defaultno" >/dev/null 2>&1 || true
+    assert_eq "gum puts No first when the default is No" "No" "$(head -1 "${gum_capture}")"
+
+    : > "${gum_capture}"
+    DIALOG_CMD="gum" dialog_yesno "T" "text" >/dev/null 2>&1 || true
+    assert_eq "gum puts Yes first otherwise" "Yes" "$(head -1 "${gum_capture}")"
+    rm -f "${gum_capture}"
+
+    _restore_fn _gum_backtitle
+    _restore_fn _gum_style_box
+    _restore_fn _gum_drain_tty
+    unset -f gum
+else
+    echo "  SKIP: no /dev/tty — gum backend assertions not run"
+fi
+DIALOG_CMD="dialog"
+
+# --- luks_open_for_resume: the OTHER path that opens the mapping ---
+#
+# The plan path (_plan_luks_setup) is covered above; this one was rewritten by
+# the same change to pass cryptsetup's arguments positionally ("${@:3}"), which
+# is exactly the shape where an off-by-one produces a command that runs, fails,
+# and leaves a resumed install with no root mounted.
+resume_dev=$(lsblk -dnpo NAME 2>/dev/null | head -1) || true
+if [[ -b "${resume_dev:-}" ]]; then
+    cs_dir=$(mktemp -d)
+    cs_log="${cs_dir}/argv"
+    cat > "${cs_dir}/cryptsetup" << 'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "${_CS_ARGV_LOG}"
+cat > "${_CS_STDIN_LOG}"
+exit 0
+STUB
+    chmod 0755 "${cs_dir}/cryptsetup"
+    export _CS_ARGV_LOG="${cs_log}" _CS_STDIN_LOG="${cs_dir}/stdin"
+    _old_path="${PATH}"
+    export PATH="${cs_dir}:${PATH}"
+
+    LUKS_ENABLED="yes"
+    LUKS_PARTITION="${resume_dev}"
+    LUKS_NAME="void-test-mapper-absent"
+    _LUKS_PASSPHRASE="correct horse battery staple"
+
+    LUKS_ALLOW_DISCARDS="no"
+    luks_open_for_resume >/dev/null 2>&1 || true
+    argv=$(cat "${cs_log}" 2>/dev/null)
+    assert_eq "resume opens with luksOpen as the action" "luksOpen" "$(head -1 <<< "${argv}")"
+    assert_contains "…on the right partition" "${resume_dev}" "${argv}"
+    assert_not_contains "…without --allow-discards by default" "--allow-discards" "${argv}"
+    assert_not_contains "…and never the passphrase in argv" "correct horse battery staple" "${argv}"
+    assert_eq "…passphrase goes through stdin" "correct horse battery staple" \
+        "$(cat "${cs_dir}/stdin" 2>/dev/null)"
+
+    : > "${cs_log}"
+    LUKS_ALLOW_DISCARDS="yes"
+    luks_open_for_resume >/dev/null 2>&1 || true
+    argv=$(cat "${cs_log}" 2>/dev/null)
+    assert_eq "resume still opens with luksOpen first" "luksOpen" "$(head -1 <<< "${argv}")"
+    assert_contains "…and carries --allow-discards when allowed" "--allow-discards" "${argv}"
+
+    export PATH="${_old_path}"
+    unset _CS_ARGV_LOG _CS_STDIN_LOG
+    rm -rf "${cs_dir}"
+    LUKS_ALLOW_DISCARDS="no"
+    LUKS_NAME="cryptroot"
+else
+    echo "  SKIP: no block device available — luks_open_for_resume argv not exercised"
+fi
+
+# --- dracut configuration ---
+#
+# Void builds a GENERIC initramfs, and dracut's crypt module only copies
+# /etc/crypttab into the image when hostonly is on — so without an explicit
+# install_items the options written above never reach early boot at all.
+dr_root=$(mktemp -d)
+_save_fn try
+try() { :; }   # the writer ends with a dracut run we must not perform here
+(
+    LUKS_DRACUT_CONF="${dr_root}/10-luks.conf"
+    LUKS_KEYFILE_TARGET="/nonexistent-keyfile"
+    _luks_write_dracut_conf
+) >/dev/null 2>&1
+_restore_fn try
+dracut_conf=$(cat "${dr_root}/10-luks.conf" 2>/dev/null)
+assert_contains "dracut config pulls /etc/crypttab into the image" \
+    'install_items+=" /etc/crypttab "' "${dracut_conf}"
+assert_contains "…and still adds the crypt module" \
+    'add_dracutmodules+=" crypt "' "${dracut_conf}"
+rm -rf "${dr_root}"
+
+# --- the default really is "no" ---
+#
+# Every consumer reads ${LUKS_ALLOW_DISCARDS:-no}; with the variable unset (a
+# config from before this option existed, or a partial resume) nothing may turn
+# discard on by itself.
+(
+    unset LUKS_ALLOW_DISCARDS
+    get_uuid() { echo "1234abcd-5678-90ef-1234-567890abcdef"; }
+    LUKS_ENABLED="yes"; LUKS_PARTITION="/dev/sda2"
+    LUKS_KEYFILE_TARGET="/nonexistent-keyfile"
+    tmp=$(mktemp -d); LUKS_CRYPTTAB="${tmp}/crypttab"
+    LUKS_KEYFILE_STAGE="/nonexistent-stage"
+    _luks_write_crypttab >/dev/null 2>&1
+    printf '%s|%s' "$(cat "${tmp}/crypttab")" "$(luks_grub_cmdline)"
+    rm -rf "${tmp}"
+) > /tmp/void-test-luks-default.$$ 2>/dev/null
+unset_out=$(cat "/tmp/void-test-luks-default.$$"); rm -f "/tmp/void-test-luks-default.$$"
+assert_not_contains "an unset LUKS_ALLOW_DISCARDS never enables discard" \
+    "discard" "${unset_out}"
+assert_contains "…but the rest of the wiring is still written" "luks" "${unset_out}"
+
+# --- verify_luks_discards: the post-phase check the repo's doctrine asks for ---
+vd_out=$(LUKS_ALLOW_DISCARDS="no" verify_luks_discards 2>&1)
+assert_eq "verification is silent when TRIM was not requested" "" "${vd_out}"
+
+vd_tmp=$(mktemp -d)
+printf 'cryptroot UUID=x none luks\n' > "${vd_tmp}/crypttab"
+vd_out=$(LUKS_ALLOW_DISCARDS="yes" LUKS_CRYPTTAB="${vd_tmp}/crypttab" \
+    LUKS_NAME="void-test-mapper-absent" verify_luks_discards 2>&1)
+assert_contains "a crypttab without the option is reported" "allow-discards" "${vd_out}"
+
+printf 'cryptroot UUID=x none luks,allow-discards\n' > "${vd_tmp}/crypttab"
+vd_out=$(LUKS_ALLOW_DISCARDS="yes" LUKS_CRYPTTAB="${vd_tmp}/crypttab" \
+    LUKS_NAME="void-test-mapper-absent" verify_luks_discards 2>&1)
+assert_not_contains "a correct crypttab raises no complaint about itself" \
+    "has no allow-discards" "${vd_out}"
+rm -rf "${vd_tmp}"
 
 # A resumed run rewrites crypttab, so the discard decision has to be read back
 # from the installed system — otherwise resume silently revokes it.
 infer_root=$(mktemp -d)
 mkdir -p "${infer_root}/etc"
 
+printf 'cryptroot /dev/sda2 /boot/luks-keyfile luks,allow-discards\n' \
+    > "${infer_root}/etc/crypttab"
+LUKS_ALLOW_DISCARDS=""
+_infer_luks_from_installed "${infer_root}" >/dev/null 2>&1
+assert_eq "resume reads allow-discards back from crypttab" "yes" "${LUKS_ALLOW_DISCARDS}"
+
+# systemd's spelling too — the file may have been written by hand or by
+# another distribution, and reading someone's existing decision is where
+# being liberal is right
 printf 'cryptroot /dev/sda2 /boot/luks-keyfile luks,discard\n' \
     > "${infer_root}/etc/crypttab"
 LUKS_ALLOW_DISCARDS=""
 _infer_luks_from_installed "${infer_root}" >/dev/null 2>&1
-assert_eq "resume reads discard back from crypttab" "yes" "${LUKS_ALLOW_DISCARDS}"
+assert_eq "resume also understands systemd's 'discard' spelling" "yes" "${LUKS_ALLOW_DISCARDS}"
+
+# tabs and padding must not hide the options field
+printf 'cryptroot\t/dev/sda2\tnone\tluks,allow-discards\n' \
+    > "${infer_root}/etc/crypttab"
+LUKS_ALLOW_DISCARDS=""
+_infer_luks_from_installed "${infer_root}" >/dev/null 2>&1
+assert_eq "tab-separated crypttab is parsed too" "yes" "${LUKS_ALLOW_DISCARDS}"
 assert_eq "…along with the container partition" "/dev/sda2" "${LUKS_PARTITION}"
 
 printf 'cryptroot /dev/sda2 /boot/luks-keyfile luks\n' \

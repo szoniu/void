@@ -132,6 +132,10 @@ odczyta z niego, **ile** miejsca jest zajęte i mniej więcej gdzie (same dane z
 zaszyfrowane). Laptop, który wozisz ze sobą i którego nie oddajesz w obce ręce —
 włącz; sprzęt, który może trafić do kogoś innego — zostaw wyłączony.
 
+Po instalacji sprawdzisz to jednym poleceniem:
+`dmsetup table cryptroot | grep allow_discards`. Gdyby czegoś brakowało,
+instalator zostawia gotowy przepis w `/root/POST-INSTALL-LUKS-TRIM.txt`.
+
 ## Kolejność przy dual-boocie z macOS
 
 1. macOS: Time Machine.

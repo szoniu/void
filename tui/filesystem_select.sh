@@ -201,6 +201,19 @@ _luks_discards_off() {
 # is why cryptsetup and every distribution default to off. Hence an explicit
 # question with the selection parked on No, plus a line in the summary.
 _screen_luks_discards_prompt() {
+    # A spinning disk has nothing to trim, and setup_periodic_trim() returns
+    # before it even writes the cron job there — asking would offer a security
+    # trade-off in exchange for nothing. Say so rather than presenting a choice
+    # whose "yes" branch is inert.
+    if declare -F _disk_is_rotational >/dev/null \
+        && [[ -n "${TARGET_DISK:-}" ]] \
+        && _disk_is_rotational "${TARGET_DISK}"; then
+        LUKS_ALLOW_DISCARDS="no"
+        export LUKS_ALLOW_DISCARDS
+        einfo "${TARGET_DISK} is a rotational disk — TRIM does not apply, not asking"
+        return 0
+    fi
+
     if dialog_yesno "TRIM on the Encrypted Disk" \
         "Allow TRIM (discard) on the encrypted root?\n\n\
 Without it the weekly TRIM job cannot reach anything on\n\

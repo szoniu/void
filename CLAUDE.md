@@ -376,20 +376,37 @@ docelowy okablowuje `lib/luks.sh` (faza chroot, po kernelu a przed bootloaderem)
 - **Kolejność w planie jest krytyczna:** `luksFormat` → `luksOpen` → `mkfs`.
   mkfs przed otwarciem kontenera nadpisałby nagłówek LUKS.
 - **TRIM na zaszyfrowanym roocie jest OPT-IN** (`LUKS_ALLOW_DISCARDS`, domyślnie
-  `no`, ekran szyfrowania pyta z kursorem na „No"). dm-crypt nie przepuszcza
-  discardu, dopóki mapping nie zostanie otwarty z `allow-discards` — bez tego
-  cotygodniowy `fstrim` z `setup_periodic_trim()` nie przycina na tym dysku
-  NICZEGO poza ESP. Włączenie kosztuje: discard ujawnia mapę zajętych bloków
-  i pozwala wnioskować o typie systemu plików **przez** warstwę szyfrowania,
-  i dlatego cryptsetup ma to domyślnie wyłączone. Skoro to trade-off
-  bezpieczeństwa, a nie detal, decyzja jest jawna i widoczna w podsumowaniu
-  przed fazą destrukcyjną. Wpięcie jest w czterech miejscach, bo każde odpowiada
-  za inny moment: `discard` w polu opcji `/etc/crypttab` (każdy boot),
-  `rd.luks.allow-discards=<uuid>` w cmdline (dracut czyta crypttab z obrazu
-  tylko w trybie hostonly — cmdline działa niezależnie od tego), `--allow-discards`
-  przy `cryptsetup luksOpen` w `lib/disk.sh` (mapping, na którym pracuje mkfs
-  w trakcie instalacji) oraz odczyt z crypttab w `_infer_luks_from_installed()`
-  (bez tego `--resume` przepisałby crypttab i po cichu cofnął wybór użytkownika).
+  `no`, ekran szyfrowania pyta z kursorem na „No"; na dysku obrotowym nie pyta
+  wcale). dm-crypt nie przepuszcza discardu, dopóki mapping nie zostanie otwarty
+  z `allow-discards` — bez tego cotygodniowy `fstrim` z `setup_periodic_trim()`
+  nie przycina na tym dysku NICZEGO poza ESP. Włączenie kosztuje: discard ujawnia
+  mapę zajętych bloków i pozwala wnioskować o typie systemu plików **przez**
+  warstwę szyfrowania, i dlatego cryptsetup ma to domyślnie wyłączone. Decyzja
+  jest jawna i widoczna w podsumowaniu przed fazą destrukcyjną.
+  **Trzy pułapki dracuta, każda cicha** (zweryfikowane w źródle dracut-ng 112,
+  czyli wersji, którą pakietuje Void — `modules.d/70crypt/`):
+  1. **W polu opcji crypttab token brzmi `allow-discards`, NIE `discard`.**
+     Pętla w `cryptroot-ask.sh` dopasowuje wyłącznie `noauto`, `swap`, `tmp`,
+     `allow-discards` i `header=*`; systemd-owe `discard` wpada w `case` bez
+     gałęzi i jest ignorowane **bez słowa błędu**.
+  2. **`rd.luks.allow-discards=<uuid>` jest no-opem** — ten sam plik porównuje
+     żądane UUID-y ze zmienną `$luksdev`, której nigdzie nie ustawia (upstreamowy
+     bug), a ponieważ `getargs` zwróciło wartość, bezargumentowa gałąź `elif`
+     też się nie wykona. Dlatego piszemy `rd.luks.allow-discards` **bez wartości**;
+     zakres i tak ogranicza `rd.luks.uuid=<uuid>` z tego samego cmdline.
+  3. **Void buduje GENERIC initramfs** (hook kernela woła gołe `dracut --force`,
+     pakiet nie dokłada `conf.d` z `hostonly`), a moduł crypt kopiuje
+     `/etc/crypttab` do obrazu tylko `if [[ $hostonly ]]` — stąd jawne
+     `install_items+=" /etc/crypttab "` w `/etc/dracut.conf.d/10-luks.conf`.
+  Wpięcia są cztery: crypttab (każdy boot), cmdline (gdy crypttab jednak nie
+  trafi do obrazu), `--allow-discards` przy `cryptsetup luksOpen` w `lib/disk.sh`
+  (mapping, na którym pracuje mkfs w trakcie instalacji) i odczyt z crypttab
+  w `_infer_luks_from_installed()` — bez tego `--resume` przepisałby crypttab
+  i po cichu cofnął wybór użytkownika (czyta OBIE pisownie, bo plik mógł
+  powstać ręcznie). Wynik sprawdza `verify_luks_discards()` — tak jak
+  `verify_wayland_only()` przy Wayland-only: cicha obietnica „TRIM działa",
+  która i tak nie działa, jest gorsza niż brak opcji; przy niepowodzeniu
+  zostaje `/root/POST-INSTALL-LUKS-TRIM.txt`.
   Prymityw `dialog_yesno` przyjmuje trzeci argument `defaultno` — Enter nie może
   włączyć czegoś takiego przypadkiem.
 - **Klawiatura w initramfs.** Prompt na hasło leci z initramfs — na MacBookach
@@ -618,7 +635,7 @@ bash tests/test_system.sh        # Service enablement, sudo drop-in, chroot left
 bash tests/shellcheck.sh         # Static analysis / lint (needs shellcheck)
 ```
 
-All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 17 functional files (652 assertions) + `shellcheck.sh` (lints all 65 `.sh` files; needs `shellcheck` installed).
+All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 17 functional files (683 assertions) + `shellcheck.sh` (lints all 65 `.sh` files; needs `shellcheck` installed).
 
 ## Known patterns and pitfalls
 
