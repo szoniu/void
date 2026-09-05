@@ -275,11 +275,19 @@ _configure_sudo_wheel() {
     local sudoers="${root}/etc/sudoers"
     local dropin="${root}/etc/sudoers.d/10-wheel"
 
+    # No /etc/sudoers at all means sudo is not installed — which happens for real:
+    # `try "Installing sudo"` can fail and the operator can choose "continue".
+    # Writing a drop-in then produces a file nothing will ever read, and the
+    # function would report success, defeating the die() gate below it.
+    if [[ ! -f "${sudoers}" ]]; then
+        eerror "${sudoers} does not exist — sudo is not installed, a drop-in would be dead weight"
+        return 1
+    fi
+
     # The whole approach rests on one condition: /etc/sudoers must actually pull
     # the directory in. Modern sudo writes `@includedir`, older ones `#includedir`
     # — both are live directives, not comments.
-    if [[ -f "${sudoers}" ]] && \
-       ! grep -Eq '^[[:space:]]*[#@]includedir[[:space:]]+/etc/sudoers\.d' "${sudoers}"; then
+    if ! grep -Eq '^[[:space:]]*[#@]includedir[[:space:]]+/etc/sudoers\.d' "${sudoers}"; then
         ewarn "/etc/sudoers does not include /etc/sudoers.d — falling back to editing it directly"
         sed -i 's/^# \(%wheel ALL=(ALL:ALL) ALL\)/\1/' "${sudoers}" 2>/dev/null || true
         sed -i 's/^# \(%wheel ALL=(ALL) ALL\)/\1/' "${sudoers}" 2>/dev/null || true
@@ -318,20 +326,53 @@ _configure_sudo_wheel() {
 # finds out after the reboot, on a machine they cannot log into.
 _CRITICAL_SERVICES="udevd dbus elogind agetty-tty1 sddm gdm greetd"
 
+# _service_not_enabled — record a service that did not get enabled
+#
+# CONTRACT: this returns 0 for anything not on the critical list, and callers
+# rely on that. install.sh runs under `set -Eeuo pipefail` with inherit_errexit
+# and every one of the ~22 call sites is a BARE command, so a non-zero return
+# from _enable_service kills the whole installer mid-chroot. That is not
+# hypothetical: `try()` offers "skip this step and continue", and a skipped
+# `xbps-install` leaves /etc/sv/<service> missing a few lines later — which used
+# to be a warning and would have become an abort after the bootloader phase,
+# with the target still mounted and system_finalize never run.
+#
+# The point of verifying the symlink was to stop failures being INVISIBLE, not
+# to make them fatal. So the signal goes where the installer already collects
+# "this step did not happen": SKIPPED_LOG, which run_post_install surfaces to
+# the user at the end.
+_service_not_enabled() {
+    local service="$1" reason="$2"
+
+    if [[ " ${_CRITICAL_SERVICES} " == *" ${service} "* ]]; then
+        die "Failed to enable critical service: ${service} — ${reason}. The installed system would come up without it."
+    fi
+
+    ewarn "Service NOT enabled: ${service} — ${reason}"
+    { printf '%s\t%s\tcmd: %s\n' \
+        "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo '?')" \
+        "Enabling runit service ${service}" "_enable_service ${service}" \
+        >> "${SKIPPED_LOG}"; } 2>/dev/null || true
+    return 0
+}
+
 # _enable_service — Enable a runit service
 #
-# Verifies that the symlink actually appeared. It used to just `ln … || true` and
-# log "Enabled" unconditionally, so a failure was indistinguishable from success:
-# the install log claimed every service was on while the system came up without a
-# display manager. SERVICE_ROOT exists to make that path testable off a live
-# machine; it is empty in production, so the paths stay absolute as before.
+# Verifies that the symlink actually appeared AND points where it should. It used
+# to just `ln … || true` and log "Enabled" unconditionally, so a failure was
+# indistinguishable from success: the install log claimed every service was on
+# while the system came up without a display manager. SERVICE_ROOT exists to make
+# that path testable off a live machine; it is empty in production, so the paths
+# stay absolute as before.
+#
+# Returns 0 for a non-critical failure ON PURPOSE — see _service_not_enabled.
 _enable_service() {
     local service="$1"
     local root="${SERVICE_ROOT:-}"
 
     if [[ ! -d "${root}/etc/sv/${service}" ]]; then
-        ewarn "Service not found: ${service}"
-        return 1
+        _service_not_enabled "${service}" "no /etc/sv/${service} (package not installed?)"
+        return 0
     fi
 
     # /var/service is only a pointer: symlink → /etc/runit/runsvdir/current →
@@ -347,18 +388,23 @@ _enable_service() {
         mkdir -p "${svcdir}" 2>/dev/null || true
     fi
 
-    ln -sf "/etc/sv/${service}" "${svcdir}/${service}" 2>/dev/null || true
+    # -n is not optional. runit-void enables agetty-tty1..6 and udevd itself, so
+    # by the time system_finalize re-enables them the target is ALREADY a symlink
+    # to a directory — and plain `ln -sf` dereferences it, creating a
+    # self-referential /etc/sv/agetty-tty1/agetty-tty1 inside the service dir
+    # instead of refreshing the link. The old `-L` check would still have seen
+    # the pre-existing link and reported success.
+    ln -sfn "/etc/sv/${service}" "${svcdir}/${service}" 2>/dev/null || true
 
-    if [[ -L "${svcdir}/${service}" ]]; then
+    # Check the TARGET, not just that something is there — see above.
+    if [[ -L "${svcdir}/${service}" ]] &&
+       [[ "$(readlink "${svcdir}/${service}" 2>/dev/null)" == "/etc/sv/${service}" ]]; then
         einfo "Enabled runit service: ${service} (${svcdir#"${root}"})"
         return 0
     fi
 
-    if [[ " ${_CRITICAL_SERVICES} " == *" ${service} "* ]]; then
-        die "Failed to enable critical service: ${service} — ${svcdir#"${root}"} is not writable. The installed system would come up without it."
-    fi
-    ewarn "Failed to enable runit service: ${service} (could not create ${svcdir#"${root}"}/${service})"
-    return 1
+    _service_not_enabled "${service}" "could not create ${svcdir#"${root}"}/${service}"
+    return 0
 }
 
 # install_power_management — Laptop power management (battery-gated).
@@ -406,24 +452,6 @@ system_finalize() {
     _enable_service "agetty-tty2"
     _enable_service "agetty-tty3"
     _enable_service "udevd"
-
-    # Drop the live medium's resolv.conf. copy_dns_info() puts it there so XBPS
-    # can resolve names inside the chroot, but nothing removed it afterwards —
-    # so the installed system booted with the DNS server of whatever network the
-    # install ran on frozen in place (or the 8.8.8.8 that ensure_dns() adds).
-    # NetworkManager only rewrites that file under some rc-manager settings, so
-    # the symptom is the confusing one: the network is up, ping by IP works,
-    # by name it does not. Removing it lets NM generate the file on first boot.
-    #
-    # Deliberately here, at the END of the last chroot phase: every step that
-    # needs name resolution inside the chroot has already run. A resume from an
-    # earlier phase re-runs copy_dns_info, so this does not strand a retry.
-    if [[ "${DRY_RUN:-0}" == "1" ]]; then
-        einfo "[DRY-RUN] Would remove the live medium's /etc/resolv.conf"
-    else
-        rm -f /etc/resolv.conf
-        einfo "Removed the live medium's /etc/resolv.conf (NetworkManager regenerates it on first boot)"
-    fi
 
     # Clean up
     checkpoint_clear

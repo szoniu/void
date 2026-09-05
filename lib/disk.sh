@@ -615,6 +615,31 @@ wait_for_block_device() {
     [[ -b "${dev}" ]]
 }
 
+# _wait_for_planned_partitions — block until every partition in the plan exists
+#
+# Split out of disk_execute_plan so it can be tested for real: the caller runs
+# only under DRY_RUN=0, where exercising it in place would mean letting sfdisk
+# and mkfs loose on a device. Review found the original assertions were greps
+# over `declare -f`, which passed even after the loop was narrowed to the ESP
+# alone — i.e. exactly the regression this code exists to prevent.
+_wait_for_planned_partitions() {
+    local _part
+    for _part in "${ESP_PARTITION:-}" "${BOOT_PARTITION:-}" "${ROOT_PARTITION:-}" \
+                 "${SWAP_PARTITION:-}" "${LUKS_PARTITION:-}"; do
+        [[ -z "${_part}" ]] && continue
+        wait_for_block_device "${_part}" && continue
+
+        # Dual-boot is the one case where a missing node is expected rather
+        # than fatal: `sfdisk --append` may hand out a different number than
+        # planned, and disk_execute_plan detects the real one right after.
+        if [[ "${PARTITION_SCHEME:-}" == "dual-boot" && "${_part}" == "${ROOT_PARTITION:-}" ]]; then
+            ewarn "Partition ${_part} did not appear — will try to detect the actual one below"
+            continue
+        fi
+        die "Partition ${_part} did not appear after partprobe — the kernel has not picked up the new partition table. Continuing would format a device that does not exist."
+    done
+}
+
 # disk_execute_plan — Execute all planned disk operations
 disk_execute_plan() {
     if [[ ${#DISK_ACTIONS[@]} -eq 0 ]]; then
@@ -665,26 +690,7 @@ disk_execute_plan() {
         else
             blockdev --rereadpt "${TARGET_DISK}" 2>/dev/null || true
         fi
-        # Wait for udev to create the nodes instead of guessing how long it takes.
-        # The old `sleep 2` was a race in both directions: on slower USB media or
-        # with more partitions udev could still be behind, and the next step of
-        # the plan (mkfs, cryptsetup luksFormat) would hit a device that is not
-        # there yet — while on a fast disk it burned two seconds every time.
-        local _part
-        for _part in "${ESP_PARTITION:-}" "${BOOT_PARTITION:-}" "${ROOT_PARTITION:-}" \
-                     "${SWAP_PARTITION:-}" "${LUKS_PARTITION:-}"; do
-            [[ -z "${_part}" ]] && continue
-            wait_for_block_device "${_part}" && continue
-
-            # Dual-boot is the one case where a missing node is expected rather
-            # than fatal: `sfdisk --append` may hand out a different number than
-            # planned, and the block right below detects the real one.
-            if [[ "${PARTITION_SCHEME:-}" == "dual-boot" && "${_part}" == "${ROOT_PARTITION:-}" ]]; then
-                ewarn "Partition ${_part} did not appear — will try to detect the actual one below"
-                continue
-            fi
-            die "Partition ${_part} did not appear after partprobe — the kernel has not picked up the new partition table. Continuing would format a device that does not exist."
-        done
+        _wait_for_planned_partitions
 
         # Verify ROOT_PARTITION exists for dual-boot (sfdisk --append may assign different number)
         if [[ "${PARTITION_SCHEME:-}" == "dual-boot" && -n "${ROOT_PARTITION:-}" ]]; then

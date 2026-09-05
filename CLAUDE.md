@@ -600,7 +600,7 @@ bash tests/test_system.sh        # Service enablement, sudo drop-in, chroot left
 bash tests/shellcheck.sh         # Static analysis / lint (needs shellcheck)
 ```
 
-All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 17 functional files (536 assertions) + `shellcheck.sh` (lints all 65 `.sh` files; needs `shellcheck` installed).
+All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 17 functional files (544 assertions) + `shellcheck.sh` (lints all 65 `.sh` files; needs `shellcheck` installed).
 
 ## Known patterns and pitfalls
 

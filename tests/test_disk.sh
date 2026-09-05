@@ -183,19 +183,52 @@ else
     echo "  SKIP: no block device available to test the positive path"
 fi
 
-# The fixed `sleep 2` it replaced was a race in both directions — assert it is
-# gone from the execution path rather than trusting that nobody re-adds it.
-exec_fn=$(declare -f disk_execute_plan)
-assert_false "no fixed sleep left after partprobe" \
-    grep -q 'sleep 2' <<< "${exec_fn}"
-assert_true "every planned partition is waited for" \
-    grep -q 'wait_for_block_device' <<< "${exec_fn}"
-assert_true "a node that never appears aborts instead of formatting blind" \
-    grep -q 'did not appear after partprobe' <<< "${exec_fn}"
-# Dual-boot is the documented exception: sfdisk --append may renumber, and the
-# rescan below handles it, so that one path must warn rather than die.
-assert_true "dual-boot root partition stays non-fatal" \
-    grep -q 'will try to detect the actual one below' <<< "${exec_fn}"
+# Which partitions are actually waited for — asserted on BEHAVIOUR, not with a
+# grep over `declare -f`. Review demonstrated the grep version passed after the
+# loop was narrowed to the ESP alone, i.e. against the exact regression it
+# guards: mkfs.ext4 or cryptsetup luksFormat hitting a node udev has not created.
+_waited=()
+wait_for_block_device() { _waited+=("$1"); [[ "$1" != "${_MISSING_DEV:-}" ]]; }
+die() { echo "DIED: $*"; return 1; }
+
+ESP_PARTITION=/dev/sda1
+BOOT_PARTITION=/dev/sda2
+ROOT_PARTITION=/dev/sda3
+SWAP_PARTITION=/dev/sda4
+LUKS_PARTITION=/dev/sda5
+PARTITION_SCHEME=auto
+_MISSING_DEV=""
+_wait_for_planned_partitions >/dev/null 2>&1
+assert_eq "waits for EVERY planned partition, not just the ESP" \
+    "/dev/sda1 /dev/sda2 /dev/sda3 /dev/sda4 /dev/sda5" "${_waited[*]}"
+
+# An optional partition that is not part of the plan must not be waited on.
+_waited=(); SWAP_PARTITION=""; LUKS_PARTITION=""
+_wait_for_planned_partitions >/dev/null 2>&1
+assert_eq "skips partitions the plan does not include" \
+    "/dev/sda1 /dev/sda2 /dev/sda3" "${_waited[*]}"
+
+# A node that never appears must abort — formatting a path that does not exist
+# is worse than a failed install.
+_waited=(); SWAP_PARTITION=/dev/sda4; LUKS_PARTITION=/dev/sda5
+_MISSING_DEV=/dev/sda3
+out=$(_wait_for_planned_partitions 2>&1) || true
+assert_contains "missing node aborts via die" "DIED:" "${out}"
+
+# ...except for the documented dual-boot case, where sfdisk --append may renumber
+# and the rescan below handles it.
+PARTITION_SCHEME=dual-boot
+out=$(_wait_for_planned_partitions 2>&1) || true
+assert_true "dual-boot root partition warns instead of dying" \
+    test -z "$(grep -o 'DIED:' <<< "${out}" || true)"
+
+# ...but a missing ESP is still fatal, even in dual-boot.
+_MISSING_DEV=/dev/sda1
+out=$(_wait_for_planned_partitions 2>&1) || true
+assert_contains "dual-boot exception does NOT extend to the ESP" "DIED:" "${out}"
+
+unset -f wait_for_block_device die
+_MISSING_DEV=""
 
 echo ""
 echo "=== Results ==="
