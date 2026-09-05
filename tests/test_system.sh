@@ -158,6 +158,25 @@ rc=0
 SUDO_ROOT="${sroot4}" _configure_sudo_wheel >/dev/null 2>&1 || rc=$?
 assert_eq "unmatched sed pattern reports failure instead of silence" "1" "${rc}"
 
+echo ""
+echo "=== system_finalize: the live medium's resolv.conf does not survive ==="
+
+finalize_fn=$(declare -f system_finalize)
+
+assert_true "system_finalize removes /etc/resolv.conf" \
+    grep -q 'rm -f /etc/resolv.conf' <<< "${finalize_fn}"
+
+# Order matters: XBPS needs name resolution, so the removal has to come after
+# the last step that uses the network inside the chroot.
+reconf_line=$(grep -n 'xbps-reconfigure -fa' <<< "${finalize_fn}" | head -1 | cut -d: -f1)
+resolv_line=$(grep -n 'rm -f /etc/resolv.conf' <<< "${finalize_fn}" | head -1 | cut -d: -f1)
+assert_true "resolv.conf is removed AFTER xbps-reconfigure" \
+    test "${resolv_line}" -gt "${reconf_line}"
+
+# A dry run must not delete the resolv.conf of the machine running the installer.
+assert_true "removal is gated on DRY_RUN" \
+    grep -q 'DRY-RUN\] Would remove' <<< "${finalize_fn}"
+
 rm -f "${LOG_FILE}"
 
 echo ""

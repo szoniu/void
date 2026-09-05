@@ -407,6 +407,24 @@ system_finalize() {
     _enable_service "agetty-tty3"
     _enable_service "udevd"
 
+    # Drop the live medium's resolv.conf. copy_dns_info() puts it there so XBPS
+    # can resolve names inside the chroot, but nothing removed it afterwards —
+    # so the installed system booted with the DNS server of whatever network the
+    # install ran on frozen in place (or the 8.8.8.8 that ensure_dns() adds).
+    # NetworkManager only rewrites that file under some rc-manager settings, so
+    # the symptom is the confusing one: the network is up, ping by IP works,
+    # by name it does not. Removing it lets NM generate the file on first boot.
+    #
+    # Deliberately here, at the END of the last chroot phase: every step that
+    # needs name resolution inside the chroot has already run. A resume from an
+    # earlier phase re-runs copy_dns_info, so this does not strand a retry.
+    if [[ "${DRY_RUN:-0}" == "1" ]]; then
+        einfo "[DRY-RUN] Would remove the live medium's /etc/resolv.conf"
+    else
+        rm -f /etc/resolv.conf
+        einfo "Removed the live medium's /etc/resolv.conf (NetworkManager regenerates it on first boot)"
+    fi
+
     # Clean up
     checkpoint_clear
     rm -f /tmp/void-installer.conf
