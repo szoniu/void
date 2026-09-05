@@ -407,6 +407,81 @@ _enable_service() {
     return 0
 }
 
+# _ensure_cronie — cronie plus its runit service, idempotently
+#
+# Two things now need the same scheduler: snapper (timeline + cleanup) and the
+# weekly fstrim below. cronie used to arrive only via the snapper path, so an
+# install with snapshots disabled had nothing to run a periodic job with —
+# which is exactly the case where TRIM still matters.
+_ensure_cronie() {
+    if ! command -v crond >/dev/null 2>&1; then
+        try "Installing cronie" xbps-install -y cronie
+    fi
+    _enable_service "cronie"
+}
+
+# _disk_is_rotational — true for a spinning disk
+#
+# Returns 1 (not rotational) when the answer is unknown as well. That is the
+# deliberate direction: `fstrim -av` skips filesystems whose device does not
+# support discard, so scheduling it on a device we cannot classify costs
+# nothing, while NOT scheduling it on an unusual storage stack (dm, md, virtio,
+# an NVMe behind a controller that hides the attribute) would silently drop TRIM
+# on the machines most likely to need it.
+_disk_is_rotational() {
+    local disk="$1"
+    local root="${TRIM_ROOT:-}"
+    local name attr
+
+    name="$(basename "${disk}")"
+    attr="${root}/sys/block/${name}/queue/rotational"
+
+    [[ -r "${attr}" ]] || return 1
+    [[ "$(cat "${attr}" 2>/dev/null)" == "1" ]]
+}
+
+# setup_periodic_trim — weekly fstrim for SSDs
+#
+# systemd has fstrim.timer; runit has no equivalent, so without this TRIM never
+# runs at all on our installs. On an SSD that means write performance degrading
+# over time and cells wearing out faster.
+#
+# cron.weekly rather than `discard=async` in the mount options, deliberately:
+# one script covers every filesystem (btrfs, ext4, xfs) instead of btrfs only,
+# a weekly batch cannot stall I/O the way continuous discard does on cheap SSDs
+# with poor firmware, and it plugs into the scheduler this repo already builds
+# for snapper. `ssd` and `space_cache=v2` from the same source were considered
+# and rejected: the first is autodetected, the second is the mkfs.btrfs default.
+setup_periodic_trim() {
+    local root="${TRIM_ROOT:-}"
+    local disk="${TARGET_DISK:-}"
+
+    if [[ -z "${disk}" ]]; then
+        ewarn "No target disk known — skipping periodic TRIM setup"
+        return 0
+    fi
+
+    if _disk_is_rotational "${disk}"; then
+        einfo "Skipping periodic TRIM: ${disk} is a rotational disk"
+        return 0
+    fi
+
+    _ensure_cronie
+
+    mkdir -p "${root}/etc/cron.weekly"
+    cat > "${root}/etc/cron.weekly/fstrim" << 'EOF'
+#!/bin/sh
+# Weekly TRIM — installed by the Void installer.
+# runit has no fstrim.timer, so this is what keeps SSD write performance from
+# degrading. `-a` covers every mounted filesystem that supports discard and
+# silently skips the ones that do not.
+exec /usr/sbin/fstrim -av
+EOF
+    chmod 0755 "${root}/etc/cron.weekly/fstrim"
+
+    einfo "Weekly TRIM scheduled (/etc/cron.weekly/fstrim)"
+}
+
 # install_power_management — Laptop power management (battery-gated).
 #
 # power-profiles-daemon is what the GNOME and KDE power applets talk to; with

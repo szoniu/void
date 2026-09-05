@@ -600,7 +600,7 @@ bash tests/test_system.sh        # Service enablement, sudo drop-in, chroot left
 bash tests/shellcheck.sh         # Static analysis / lint (needs shellcheck)
 ```
 
-All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 17 functional files (574 assertions) + `shellcheck.sh` (lints all 65 `.sh` files; needs `shellcheck` installed).
+All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 17 functional files (587 assertions) + `shellcheck.sh` (lints all 65 `.sh` files; needs `shellcheck` installed).
 
 ## Known patterns and pitfalls
 
@@ -613,6 +613,16 @@ All tests are standalone — they do not require root or hardware. They use `DRY
   then `ro`, looks for `/var/db/xbps` or `ID=void`); the `disks` phase in
   `tui/progress.sh` refuses `disk_execute_plan` when it says yes in resume mode
   and mounts instead. In Gentoo this nearly wiped a built system twice.
+- **runit has no `fstrim.timer`, so nothing trimmed SSDs at all.** `setup_periodic_trim()`
+  (`lib/system.sh`) writes `/etc/cron.weekly/fstrim` (`fstrim -av`, mode 0755) when the
+  target disk is non-rotational. Chosen over `discard=async` in the mount options: one
+  script covers btrfs/ext4/xfs instead of btrfs only, and a weekly batch cannot stall
+  I/O the way continuous discard does on cheap SSDs. An UNKNOWN device (dm/md/virtio,
+  no `queue/rotational`) is treated as non-rotational on purpose — `fstrim -av` skips
+  what cannot discard, so scheduling costs nothing while skipping would silently drop
+  TRIM on exactly the unusual storage stacks. `cronie` moved out of `snapper_setup` into
+  the shared `_ensure_cronie()`: it used to arrive only with snapshots, so an install
+  without them had no scheduler at all.
 - **A BitLocker partition is an INVISIBLE Windows install.** Windows 11 24H2
   encrypts by default on consumer machines, and an encrypted volume cannot be
   mounted and has no readable `/Windows/System32` — so `_detect_ntfs_on_partition()`

@@ -27,7 +27,10 @@ snapper_setup() {
 
     einfo "Setting up btrfs snapshots (snapper + grub-btrfs)..."
 
-    try "Installing snapper and grub-btrfs" xbps-install -y snapper grub-btrfs cronie
+    try "Installing snapper and grub-btrfs" xbps-install -y snapper grub-btrfs
+    # cronie via the shared helper — the weekly fstrim needs the same scheduler,
+    # and it must not depend on snapshots being enabled to get one.
+    _ensure_cronie
 
     _snapper_create_root_config
     _snapper_write_cron_jobs
@@ -138,7 +141,7 @@ EOF
 # cronie (the scheduler the two jobs above depend on).
 _snapper_enable_services() {
     _enable_service "snapperd"
-    _enable_service "cronie"
+    # cronie is already installed and enabled by _ensure_cronie() above
 
     # grub-btrfsd watches /.snapshots via inotify and regenerates grub.cfg, so
     # a new snapshot shows up in the boot menu without any manual step.

@@ -25,6 +25,7 @@ source "${LIB_DIR}/utils.sh"
 source "${LIB_DIR}/dialog.sh"
 source "${LIB_DIR}/config.sh"
 source "${LIB_DIR}/chroot.sh"
+source "${LIB_DIR}/snapper.sh"
 source "${LIB_DIR}/system.sh"
 
 PASS=0
@@ -259,6 +260,66 @@ run_line=$(grep -n 'run_chroot_phase$' <<< "${prog}" | head -1 | cut -d: -f1)
 tear_line=$(grep -n 'chroot_teardown$' <<< "${prog}" | head -1 | cut -d: -f1)
 assert_true "runs after run_chroot_phase (hook keeps DNS)" test "${drop_line}" -gt "${run_line}"
 assert_true "runs before chroot_teardown (target still mounted)" test "${drop_line}" -lt "${tear_line}"
+
+echo ""
+echo "=== setup_periodic_trim: runit has no fstrim.timer (Forgejo #23) ==="
+
+# Stub the two things that would touch the real system. _ensure_cronie is
+# exercised separately below; here we only care about the cron job itself.
+_ensure_cronie() { CRONIE_CALLED=1; }
+
+# SSD: the job is written, executable, and runs fstrim across all filesystems.
+troot1="${TMP_ROOT}/trim-ssd"
+mkdir -p "${troot1}/sys/block/nvme0n1/queue"
+echo 0 > "${troot1}/sys/block/nvme0n1/queue/rotational"
+CRONIE_CALLED=0
+TRIM_ROOT="${troot1}" TARGET_DISK=/dev/nvme0n1 setup_periodic_trim >/dev/null 2>&1
+assert_true "cron job created for an SSD" test -f "${troot1}/etc/cron.weekly/fstrim"
+assert_true "cron job is executable (run-parts skips it otherwise)" \
+    test -x "${troot1}/etc/cron.weekly/fstrim"
+assert_eq "job mode is 0755" "755" \
+    "$(stat -c '%a' "${troot1}/etc/cron.weekly/fstrim" 2>/dev/null)"
+assert_true "trims every mounted filesystem, not just root" \
+    grep -q 'fstrim -av' "${troot1}/etc/cron.weekly/fstrim"
+assert_eq "cronie ensured — nothing would run the job otherwise" "1" "${CRONIE_CALLED}"
+
+# Spinning disk: nothing scheduled. fstrim on an HDD is pointless work.
+troot2="${TMP_ROOT}/trim-hdd"
+mkdir -p "${troot2}/sys/block/sda/queue"
+echo 1 > "${troot2}/sys/block/sda/queue/rotational"
+CRONIE_CALLED=0
+TRIM_ROOT="${troot2}" TARGET_DISK=/dev/sda setup_periodic_trim >/dev/null 2>&1
+assert_false "no cron job for a rotational disk" test -e "${troot2}/etc/cron.weekly/fstrim"
+assert_eq "and cronie is not pulled in for nothing" "0" "${CRONIE_CALLED}"
+
+# Unknown device: schedule anyway. `fstrim -av` skips filesystems that cannot
+# discard, so this costs nothing — while skipping would silently drop TRIM on
+# dm/md/virtio stacks, i.e. the machines most likely to need it.
+troot3="${TMP_ROOT}/trim-unknown"
+mkdir -p "${troot3}/sys/block"
+CRONIE_CALLED=0
+TRIM_ROOT="${troot3}" TARGET_DISK=/dev/mapper/vg-root setup_periodic_trim >/dev/null 2>&1
+assert_true "unclassifiable device still gets TRIM" \
+    test -f "${troot3}/etc/cron.weekly/fstrim"
+
+# No target disk at all (a resume that lost its config): warn, do not crash.
+troot4="${TMP_ROOT}/trim-nodisk"
+mkdir -p "${troot4}"
+rc=0
+TRIM_ROOT="${troot4}" TARGET_DISK="" setup_periodic_trim >/dev/null 2>&1 || rc=$?
+assert_eq "missing TARGET_DISK is survivable" "0" "${rc}"
+assert_false "...and schedules nothing" test -e "${troot4}/etc/cron.weekly/fstrim"
+
+unset -f _ensure_cronie
+
+# TRIM must not depend on snapshots being enabled — that was the whole point of
+# splitting cronie out of snapper_setup.
+assert_false "snapper no longer owns the cronie install" \
+    grep -q 'xbps-install -y snapper grub-btrfs cronie' <<< "$(declare -f snapper_setup)"
+assert_true "snapper goes through the shared helper" \
+    grep -q '_ensure_cronie' <<< "$(declare -f snapper_setup)"
+assert_true "and the TRIM path does too" \
+    grep -q '_ensure_cronie' <<< "$(declare -f setup_periodic_trim)"
 
 rm -f "${LOG_FILE}"
 

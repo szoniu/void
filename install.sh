@@ -295,6 +295,7 @@ _do_chroot_phases() {
         einfo "--- Phase: Filesystem tools and fstab ---"
         maybe_exec 'before_fstab'
         install_filesystem_tools
+        setup_periodic_trim
         generate_fstab
         # crypttab + dracut + keyfile: after the kernel (dracut needs modules),
         # before the bootloader (GRUB config reads the LUKS UUID).
