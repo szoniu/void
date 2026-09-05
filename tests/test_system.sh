@@ -344,6 +344,24 @@ assert_true "encrypted install still gets the job" \
 assert_true "...and is told it will not trim the encrypted root" \
     grep -q 'LUKS' <<< "${luks_out}"
 
+assert_true "...and specifically that it will NOT trim it" \
+    grep -q 'NOT trim' <<< "${luks_out}"
+
+# With discard allowed (Forgejo #25) the same install DOES trim the root, so
+# the warning must go — repeating it would send the user chasing a setting
+# they already made.
+troot5b="${TMP_ROOT}/trim-luks-discard"
+mkdir -p "${troot5b}/sys/block/nvme0n1/queue"
+echo 0 > "${troot5b}/sys/block/nvme0n1/queue/rotational"
+luksd_out=$(TRIM_ROOT="${troot5b}" TARGET_DISK=/dev/nvme0n1 LUKS_ENABLED=yes \
+    LUKS_ALLOW_DISCARDS=yes setup_periodic_trim 2>&1 || true)
+assert_true "discard-allowed install still gets the job" \
+    test -f "${troot5b}/etc/cron.weekly/fstrim"
+assert_false "no 'will NOT trim' warning when discard is allowed" \
+    grep -q 'NOT trim' <<< "${luksd_out}"
+assert_true "...and it says the encrypted root is covered" \
+    grep -q 'trims the encrypted root' <<< "${luksd_out}"
+
 troot6="${TMP_ROOT}/trim-noluks"
 mkdir -p "${troot6}/sys/block/nvme0n1/queue"
 echo 0 > "${troot6}/sys/block/nvme0n1/queue/rotational"

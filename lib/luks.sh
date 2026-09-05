@@ -20,6 +20,8 @@ source "${LIB_DIR}/protection.sh"
 # Where the outer process leaves the keyfile it already added to the container.
 : "${LUKS_KEYFILE_STAGE:=/tmp/void-installer-luks.key}"
 : "${LUKS_KEYFILE_TARGET:=/boot/luks-keyfile}"
+# Overridable so the crypttab writer can be exercised outside a real chroot.
+: "${LUKS_CRYPTTAB:=/etc/crypttab}"
 
 # luks_configure_system — Entry point for the chroot phase.
 luks_configure_system() {
@@ -53,11 +55,20 @@ _luks_write_crypttab() {
         keyfile_field="${LUKS_KEYFILE_TARGET}"
     fi
 
-    printf '%s UUID=%s %s luks\n' "${name}" "${luks_uuid}" "${keyfile_field}" \
-        > /etc/crypttab
-    chmod 600 /etc/crypttab
+    # `discard` only when the user asked for it on the encryption screen: it
+    # lets TRIM through dm-crypt (without it the weekly fstrim job reaches
+    # nothing on this disk), at the cost of exposing the used-block map
+    # through the encryption layer. Upstream's default is off for that reason.
+    local options="luks"
+    if [[ "${LUKS_ALLOW_DISCARDS:-no}" == "yes" ]]; then
+        options="luks,discard"
+    fi
 
-    einfo "  /etc/crypttab: ${name} -> UUID=${luks_uuid} (key: ${keyfile_field})"
+    printf '%s UUID=%s %s %s\n' "${name}" "${luks_uuid}" "${keyfile_field}" \
+        "${options}" > "${LUKS_CRYPTTAB}"
+    chmod 600 "${LUKS_CRYPTTAB}"
+
+    einfo "  /etc/crypttab: ${name} -> UUID=${luks_uuid} (key: ${keyfile_field}, opts: ${options})"
 }
 
 # _luks_keyfile_is_safe — The keyfile trick is only acceptable while the
@@ -132,6 +143,15 @@ luks_grub_cmdline() {
     local params="rd.luks.uuid=${luks_uuid}"
     if [[ -f "${LUKS_KEYFILE_TARGET}" ]]; then
         params+=" rd.luks.key=${LUKS_KEYFILE_TARGET}"
+    fi
+    # Belt and braces next to the `discard` option in crypttab: dracut only
+    # reads crypttab from inside the image, and whether it lands there depends
+    # on hostonly mode. The cmdline flag is read by the crypt module directly,
+    # so the mapping is opened with allow-discards either way. Scoped to our
+    # UUID rather than blanket — an external encrypted disk unlocked at boot
+    # is not covered by a decision made about this install.
+    if [[ "${LUKS_ALLOW_DISCARDS:-no}" == "yes" ]]; then
+        params+=" rd.luks.allow-discards=${luks_uuid}"
     fi
 
     printf '%s' "${params}"

@@ -124,6 +124,14 @@ zalogowaniu sprawdź `lsinitrd /boot/initramfs-*.img | grep applespi`.
 Hasło podajesz **raz** (GRUB) — drugie pytanie z initramfs znika dzięki keyfile'owi,
 który leży na zaszyfrowanym roocie.
 
+Druga rzecz, o którą instalator pyta przy szyfrowaniu, to **TRIM na zaszyfrowanym
+dysku** (domyślnie wyłączony). Na NVMe w MacBooku 12" ma to realne znaczenie — bez
+niego cotygodniowy `fstrim` nie przycina nic poza 200-megabajtowym ESP Apple, a dysk
+z czasem zwalnia przy zapisie. Cena: ktoś, kto dostanie w ręce wyłączony komputer,
+odczyta z niego, **ile** miejsca jest zajęte i mniej więcej gdzie (same dane zostają
+zaszyfrowane). Laptop, który wozisz ze sobą i którego nie oddajesz w obce ręce —
+włącz; sprzęt, który może trafić do kogoś innego — zostaw wyłączony.
+
 ## Kolejność przy dual-boocie z macOS
 
 1. macOS: Time Machine.

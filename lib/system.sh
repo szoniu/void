@@ -617,9 +617,13 @@ EOF
     # a cron job, would change the security profile of an encrypted install
     # without the user knowing — so this warns and leaves the decision to them.
     if [[ "${LUKS_ENABLED:-no}" == "yes" ]]; then
-        ewarn "LUKS is enabled: the weekly job will NOT trim the encrypted root."
-        ewarn "dm-crypt blocks discard unless /etc/crypttab carries the 'discard' option,"
-        ewarn "which leaks the used-block map through the encryption layer — your call."
+        if [[ "${LUKS_ALLOW_DISCARDS:-no}" == "yes" ]]; then
+            einfo "LUKS with discard allowed: the weekly job trims the encrypted root too."
+        else
+            ewarn "LUKS is enabled: the weekly job will NOT trim the encrypted root."
+            ewarn "dm-crypt blocks discard unless /etc/crypttab carries the 'discard' option,"
+            ewarn "which leaks the used-block map through the encryption layer — your call."
+        fi
     fi
 }
 

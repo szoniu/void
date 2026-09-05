@@ -119,6 +119,130 @@ assert_not_contains "passphrase absent from the log" "correct horse battery stap
 assert_contains "log says the payload was withheld" "secret withheld" "${log_text}"
 
 echo ""
+echo "=== TRIM on the encrypted root (Forgejo #25) ==="
+
+# The mapping the installer itself works through: with discard off, mkfs must
+# not be handed an allow-discards mapping, and with it on it must be.
+blkid() { return 1; }
+DRY_RUN=0
+
+_setup_config
+LUKS_ALLOW_DISCARDS="no"
+disk_plan_auto
+plan_text=$(printf '%s\n' "${DISK_ACTIONS[@]}")
+assert_not_contains "luksOpen has no --allow-discards by default" \
+    "--allow-discards" "${plan_text}"
+
+_setup_config
+LUKS_ALLOW_DISCARDS="yes"
+disk_plan_auto
+plan_text=$(printf '%s\n' "${DISK_ACTIONS[@]}")
+assert_contains "luksOpen gets --allow-discards when asked for" \
+    "--allow-discards" "${plan_text}"
+
+# It has to be the OPEN action carrying it — the format step neither needs nor
+# accepts the flag, and a mapping opened without it ignores discard for the
+# whole install. Actions are "desc|||cmd" with the command %q-quoted, so match
+# per action rather than on the flattened plan text.
+open_action=""; format_action=""
+for a in "${DISK_ACTIONS[@]}"; do
+    [[ "${a}" == *"Open LUKS container"* ]] && open_action="${a}"
+    [[ "${a}" == *"Set up LUKS encryption"* ]] && format_action="${a}"
+done
+assert_contains "the open action is the one carrying it" \
+    "--allow-discards" "${open_action}"
+assert_not_contains "the luksFormat action does not" \
+    "--allow-discards" "${format_action}"
+
+unset -f blkid
+
+# crypttab options field — what dm-crypt reads at every boot
+_crypttab_for() {
+    local want="$1"
+    local tmp; tmp=$(mktemp -d)
+    (
+        get_uuid() { echo "1234abcd-5678-90ef-1234-567890abcdef"; }
+        LUKS_CRYPTTAB="${tmp}/crypttab"
+        LUKS_PARTITION="/dev/sda2"
+        LUKS_NAME="cryptroot"
+        LUKS_ALLOW_DISCARDS="${want}"
+        LUKS_KEYFILE_STAGE="/nonexistent-stage"
+        _luks_write_crypttab
+    ) >/dev/null 2>&1
+    cat "${tmp}/crypttab" 2>/dev/null
+    rm -rf "${tmp}"
+}
+
+ct_off=$(_crypttab_for "no")
+ct_on=$(_crypttab_for "yes")
+
+assert_contains "crypttab carries the plain luks options field by default" \
+    "none luks" "${ct_off}"
+assert_not_contains "…and no discard" "discard" "${ct_off}"
+assert_contains "crypttab carries discard when allowed" "luks,discard" "${ct_on}"
+
+# Kernel cmdline — dracut reads this even when crypttab is not in the image
+get_uuid() { echo "1234abcd-5678-90ef-1234-567890abcdef"; }
+LUKS_ENABLED="yes"
+LUKS_PARTITION="/dev/sda2"
+LUKS_KEYFILE_TARGET="/nonexistent-keyfile"
+
+LUKS_ALLOW_DISCARDS="no"
+assert_not_contains "cmdline has no allow-discards by default" \
+    "allow-discards" "$(luks_grub_cmdline)"
+
+LUKS_ALLOW_DISCARDS="yes"
+cmdline=$(luks_grub_cmdline)
+assert_contains "cmdline carries rd.luks.allow-discards when allowed" \
+    "rd.luks.allow-discards=1234abcd-5678-90ef-1234-567890abcdef" "${cmdline}"
+assert_contains "…alongside rd.luks.uuid" "rd.luks.uuid=1234abcd" "${cmdline}"
+unset -f get_uuid
+LUKS_ALLOW_DISCARDS="no"
+
+# The TUI question must not default to yes — this is a security trade-off.
+fs_screen=$(cat "${SCRIPT_DIR}/tui/filesystem_select.sh")
+assert_contains "the discard prompt asks with the selection on No" \
+    'defaultno' "${fs_screen}"
+
+# …and dialog_yesno must actually pass that through to the backend.
+captured=""
+dialog() { captured="$*"; return 1; }
+DIALOG_CMD="dialog" dialog_yesno "T" "text" "defaultno" || true
+assert_contains "dialog_yesno forwards --defaultno" "--defaultno" "${captured}"
+captured=""
+DIALOG_CMD="dialog" dialog_yesno "T" "text" || true
+assert_not_contains "…and omits it otherwise" "--defaultno" "${captured}"
+unset -f dialog
+
+# A resumed run rewrites crypttab, so the discard decision has to be read back
+# from the installed system — otherwise resume silently revokes it.
+infer_root=$(mktemp -d)
+mkdir -p "${infer_root}/etc"
+
+printf 'cryptroot /dev/sda2 /boot/luks-keyfile luks,discard\n' \
+    > "${infer_root}/etc/crypttab"
+LUKS_ALLOW_DISCARDS=""
+_infer_luks_from_installed "${infer_root}" >/dev/null 2>&1
+assert_eq "resume reads discard back from crypttab" "yes" "${LUKS_ALLOW_DISCARDS}"
+assert_eq "…along with the container partition" "/dev/sda2" "${LUKS_PARTITION}"
+
+printf 'cryptroot /dev/sda2 /boot/luks-keyfile luks\n' \
+    > "${infer_root}/etc/crypttab"
+LUKS_ALLOW_DISCARDS="yes"
+_infer_luks_from_installed "${infer_root}" >/dev/null 2>&1
+assert_eq "a crypttab without discard resumes as no" "no" "${LUKS_ALLOW_DISCARDS}"
+
+# "nodiscard" and "discard-me" must not read as discard
+printf 'cryptroot /dev/sda2 none luks,nodiscard\n' \
+    > "${infer_root}/etc/crypttab"
+LUKS_ALLOW_DISCARDS="yes"
+_infer_luks_from_installed "${infer_root}" >/dev/null 2>&1
+assert_eq "a substring match does not count as discard" "no" "${LUKS_ALLOW_DISCARDS}"
+
+rm -rf "${infer_root}"
+LUKS_ALLOW_DISCARDS="no"
+
+echo ""
 echo "=== Resume: an existing container is opened, never re-formatted ==="
 
 # blkid stub: partition already carries a LUKS header
@@ -176,7 +300,7 @@ _valid_base() {
     GPU_VENDOR="intel"; DESKTOP_TYPE="kde"; USERNAME="user"
     ROOT_PASSWORD_HASH='$6$x$y'; USER_PASSWORD_HASH='$6$x$y'
     ESP_PARTITION="/dev/sda1"; ROOT_PARTITION="/dev/sda2"
-    LUKS_ENABLED="no"; LUKS_PARTITION=""
+    LUKS_ENABLED="no"; LUKS_PARTITION=""; LUKS_ALLOW_DISCARDS="no"
 }
 
 _valid_base
@@ -192,6 +316,19 @@ out=$(validate_config 2>&1) && rc=0 || rc=$?
 assert_eq "LUKS without a container partition rejected" "1" "${rc}"
 
 _valid_base
+LUKS_ENABLED="no"
+LUKS_ALLOW_DISCARDS="yes"
+out=$(validate_config 2>&1) && rc=0 || rc=$?
+assert_eq "discard without encryption rejected" "1" "${rc}"
+assert_contains "message names LUKS_ALLOW_DISCARDS" "LUKS_ALLOW_DISCARDS" "${out}"
+
+_valid_base
+LUKS_ALLOW_DISCARDS="maybe"
+out=$(validate_config 2>&1) && rc=0 || rc=$?
+assert_eq "bad LUKS_ALLOW_DISCARDS rejected" "1" "${rc}"
+LUKS_ALLOW_DISCARDS="no"
+
+_valid_base
 LUKS_ENABLED="yes"
 PARTITION_SCHEME="manual"
 LUKS_PARTITION="/dev/sda2"
@@ -202,7 +339,7 @@ assert_contains "message explains manual is unsupported" "manual partitioning" "
 echo ""
 echo "=== Config plumbing ==="
 
-for var in LUKS_ENABLED LUKS_PARTITION; do
+for var in LUKS_ENABLED LUKS_PARTITION LUKS_ALLOW_DISCARDS; do
     found=0
     for known in "${CONFIG_VARS[@]}"; do
         [[ "${known}" == "${var}" ]] && found=1 && break

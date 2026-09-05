@@ -135,6 +135,7 @@ _screen_luks_prompt() {
     if [[ "${PARTITION_SCHEME:-}" == "manual" ]]; then
         LUKS_ENABLED="${LUKS_ENABLED:-no}"
         export LUKS_ENABLED
+        _luks_discards_off
         return 0
     fi
 
@@ -143,6 +144,7 @@ _screen_luks_prompt() {
     if [[ "${DRY_RUN:-0}" != "1" ]] && ! command -v cryptsetup >/dev/null 2>&1; then
         LUKS_ENABLED="no"
         export LUKS_ENABLED
+        _luks_discards_off
         einfo "cryptsetup not available on this live medium — encryption not offered"
         return 0
     fi
@@ -166,12 +168,57 @@ There is NO recovery if the passphrase is lost.${warn}"; then
         if ! luks_prompt_passphrase; then
             LUKS_ENABLED="no"
             export LUKS_ENABLED
+            _luks_discards_off
             return 1
         fi
+
+        _screen_luks_discards_prompt
     else
         LUKS_ENABLED="no"
         export LUKS_ENABLED
+        _luks_discards_off
     fi
+
+    return 0
+}
+
+# _luks_discards_off — Keep the discard setting from surviving a path where
+# encryption ends up disabled. The variable is in CONFIG_VARS, so a preset or
+# an earlier pass through this screen can carry a stale "yes" into a run with
+# no container at all — which validate_config then rejects.
+_luks_discards_off() {
+    LUKS_ALLOW_DISCARDS="no"
+    export LUKS_ALLOW_DISCARDS
+    return 0
+}
+
+# _screen_luks_discards_prompt — TRIM on the encrypted root (Forgejo #25).
+#
+# dm-crypt does not pass discard through unless the mapping is opened with
+# allow-discards, so on an encrypted install the weekly fstrim job trims
+# nothing but the ESP. Turning it on is a real trade-off, not a detail:
+# discard reveals which blocks are in use through the encryption layer, which
+# is why cryptsetup and every distribution default to off. Hence an explicit
+# question with the selection parked on No, plus a line in the summary.
+_screen_luks_discards_prompt() {
+    if dialog_yesno "TRIM on the Encrypted Disk" \
+        "Allow TRIM (discard) on the encrypted root?\n\n\
+Without it the weekly TRIM job cannot reach anything on\n\
+the encrypted disk — on an SSD that means write speed\n\
+degrading over time and cells wearing out faster.\n\n\
+With it, someone with access to the powered-off disk can\n\
+see HOW MUCH space is used and roughly where, and can\n\
+often tell the filesystem type — without the passphrase.\n\
+The data itself stays encrypted either way.\n\n\
+Say yes on a laptop SSD you care about keeping fast.\n\
+Say no if the disk may end up in someone else's hands\n\
+and even the used-block map matters." "defaultno"; then
+        LUKS_ALLOW_DISCARDS="yes"
+        ewarn "TRIM enabled on the encrypted root — the used-block map is visible"
+    else
+        LUKS_ALLOW_DISCARDS="no"
+    fi
+    export LUKS_ALLOW_DISCARDS
 
     return 0
 }

@@ -155,6 +155,7 @@ All config variables are defined in `CONFIG_VARS[]` in `lib/constants.sh`:
 | `SHRINK_NEW_SIZE_MIB` | integer | New size after shrink (MiB) |
 | `LUKS_ENABLED` | yes/no | Encrypt the root partition with LUKS |
 | `LUKS_PARTITION` | /dev/sdXN | Raw partition holding the LUKS container (root is then /dev/mapper/cryptroot) |
+| `LUKS_ALLOW_DISCARDS` | yes/no | Let TRIM through dm-crypt (opt-in — exposes the used-block map) |
 | `ENABLE_HYPRLAND` | yes/no | Install Hyprland ecosystem (standalone, niezależny od Noctalia) |
 | `ENABLE_NIRI` | yes/no | Install niri ecosystem (niri + xwayland-satellite + Waybar/fuzzel/mako) |
 | `APPLE_DETECTED` | 0/1 | Apple hardware detected (DMI `Apple Inc.`) |
@@ -374,6 +375,23 @@ docelowy okablowuje `lib/luks.sh` (faza chroot, po kernelu a przed bootloaderem)
   gdy `BOOT_PARTITION` jest ustawione (osobny, niezaszyfrowany `/boot`).
 - **Kolejność w planie jest krytyczna:** `luksFormat` → `luksOpen` → `mkfs`.
   mkfs przed otwarciem kontenera nadpisałby nagłówek LUKS.
+- **TRIM na zaszyfrowanym roocie jest OPT-IN** (`LUKS_ALLOW_DISCARDS`, domyślnie
+  `no`, ekran szyfrowania pyta z kursorem na „No"). dm-crypt nie przepuszcza
+  discardu, dopóki mapping nie zostanie otwarty z `allow-discards` — bez tego
+  cotygodniowy `fstrim` z `setup_periodic_trim()` nie przycina na tym dysku
+  NICZEGO poza ESP. Włączenie kosztuje: discard ujawnia mapę zajętych bloków
+  i pozwala wnioskować o typie systemu plików **przez** warstwę szyfrowania,
+  i dlatego cryptsetup ma to domyślnie wyłączone. Skoro to trade-off
+  bezpieczeństwa, a nie detal, decyzja jest jawna i widoczna w podsumowaniu
+  przed fazą destrukcyjną. Wpięcie jest w czterech miejscach, bo każde odpowiada
+  za inny moment: `discard` w polu opcji `/etc/crypttab` (każdy boot),
+  `rd.luks.allow-discards=<uuid>` w cmdline (dracut czyta crypttab z obrazu
+  tylko w trybie hostonly — cmdline działa niezależnie od tego), `--allow-discards`
+  przy `cryptsetup luksOpen` w `lib/disk.sh` (mapping, na którym pracuje mkfs
+  w trakcie instalacji) oraz odczyt z crypttab w `_infer_luks_from_installed()`
+  (bez tego `--resume` przepisałby crypttab i po cichu cofnął wybór użytkownika).
+  Prymityw `dialog_yesno` przyjmuje trzeci argument `defaultno` — Enter nie może
+  włączyć czegoś takiego przypadkiem.
 - **Klawiatura w initramfs.** Prompt na hasło leci z initramfs — na MacBookach
   z klawiaturą SPI działa tylko dzięki `force_drivers` z `lib/apple.sh`.
   Tryb `manual` nie jest wspierany (`validate_config` to blokuje).
@@ -600,7 +618,7 @@ bash tests/test_system.sh        # Service enablement, sudo drop-in, chroot left
 bash tests/shellcheck.sh         # Static analysis / lint (needs shellcheck)
 ```
 
-All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 17 functional files (627 assertions) + `shellcheck.sh` (lints all 65 `.sh` files; needs `shellcheck` installed).
+All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 17 functional files (652 assertions) + `shellcheck.sh` (lints all 65 `.sh` files; needs `shellcheck` installed).
 
 ## Known patterns and pitfalls
 

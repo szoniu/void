@@ -247,8 +247,12 @@ dialog_msgbox() {
 }
 
 # dialog_yesno — Ask yes/no question. Returns 0=yes, 1=no
+#
+# An optional third argument "defaultno" parks the selection on No. It exists
+# for questions where declining is the safe answer — a security trade-off, a
+# destructive step — so that hitting Enter cannot silently turn something on.
 dialog_yesno() {
-    local title="$1" text="$2"
+    local title="$1" text="$2" default="${3:-}"
     if [[ "${DIALOG_CMD}" == "gum" ]]; then
         local _gum_rc=0 _gum_attempt _choice
         for _gum_attempt in 1 2 3; do
@@ -259,7 +263,11 @@ dialog_yesno() {
             _gum_drain_tty
             local _t0; _t0=$(_gum_time_ms)
             _gum_rc=0
-            _choice=$(printf 'Yes\nNo\n' | gum choose \
+            local _gum_order='Yes\nNo\n'
+            if [[ "${default}" == "defaultno" ]]; then
+                _gum_order='No\nYes\n'
+            fi
+            _choice=$(printf '%b' "${_gum_order}" | gum choose \
                 --cursor "▸ " --cursor.foreground 6 \
                 --selected.foreground 0 --selected.background 6 \
                 --no-show-help \
@@ -276,7 +284,11 @@ dialog_yesno() {
             stty echo </dev/tty 2>/dev/null || true
             local _key=""
             while true; do
-                printf '  [Y]es / [N]o: ' >/dev/tty
+                if [[ "${default}" == "defaultno" ]]; then
+                    printf '  [y]es / [N]o: ' >/dev/tty
+                else
+                    printf '  [Y]es / [N]o: ' >/dev/tty
+                fi
                 read -rsn1 _key </dev/tty
                 echo "" >/dev/tty
                 case "${_key}" in
@@ -290,10 +302,18 @@ dialog_yesno() {
         # Yes=0, No=1
         [[ "${_choice}" == "Yes" ]] && return 0 || return 1
     fi
-    "${DIALOG_CMD}" --backtitle "${INSTALLER_NAME} v${INSTALLER_VERSION}" \
-        --title "${title}" \
-        --yesno "${text}" \
-        "${DIALOG_HEIGHT}" "${DIALOG_WIDTH}"
+    local -a yesno_args=(
+        --backtitle "${INSTALLER_NAME} v${INSTALLER_VERSION}"
+        --title "${title}"
+    )
+    # dialog and whiptail both understand --defaultno; it has to precede
+    # --yesno, which consumes the rest of the line.
+    if [[ "${default}" == "defaultno" ]]; then
+        yesno_args+=(--defaultno)
+    fi
+    yesno_args+=(--yesno "${text}" "${DIALOG_HEIGHT}" "${DIALOG_WIDTH}")
+
+    "${DIALOG_CMD}" "${yesno_args[@]}"
 }
 
 # dialog_inputbox — Get text input. Prints result to stdout.
