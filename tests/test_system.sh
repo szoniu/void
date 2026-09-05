@@ -282,7 +282,19 @@ assert_true "cron job is executable (run-parts skips it otherwise)" \
 assert_eq "job mode is 0755" "755" \
     "$(stat -c '%a' "${troot1}/etc/cron.weekly/fstrim" 2>/dev/null)"
 assert_true "trims every mounted filesystem, not just root" \
-    grep -q 'fstrim -av' "${troot1}/etc/cron.weekly/fstrim"
+    grep -qE 'fstrim .*-av' "${troot1}/etc/cron.weekly/fstrim"
+# Unsupported filesystems must not mail root once a week — that is how people
+# learn to ignore cron mail.
+assert_true "silences 'discard not supported' noise" \
+    grep -q -- '--quiet-unsupported' "${troot1}/etc/cron.weekly/fstrim"
+# No absolute binary path: cron runs with a minimal environment and a job that
+# cannot find its binary fails silently.
+assert_true "sets an explicit PATH instead of hardcoding the binary" \
+    grep -q '^PATH=' "${troot1}/etc/cron.weekly/fstrim"
+# Checked on the exec line only — the comment above it legitimately mentions the
+# path it is explaining why not to use.
+assert_false "the exec line does not hardcode a binary path" \
+    grep -qE '^exec +/' "${troot1}/etc/cron.weekly/fstrim"
 assert_eq "cronie ensured — nothing would run the job otherwise" "1" "${CRONIE_CALLED}"
 
 # Spinning disk: nothing scheduled. fstrim on an HDD is pointless work.
@@ -312,7 +324,84 @@ TRIM_ROOT="${troot4}" TARGET_DISK="" setup_periodic_trim >/dev/null 2>&1 || rc=$
 assert_eq "missing TARGET_DISK is survivable" "0" "${rc}"
 assert_false "...and schedules nothing" test -e "${troot4}/etc/cron.weekly/fstrim"
 
-unset -f _ensure_cronie
+# NOT `unset -f`: bash has no function stack, so unsetting the stub drops the
+# real _ensure_cronie from lib/system.sh entirely, and every assertion below
+# would silently exercise a missing function. Re-source to restore it.
+source "${LIB_DIR}/system.sh"
+
+# LUKS: the job is still scheduled (the ESP and any unencrypted mount benefit),
+# but claiming "TRIM scheduled" without saying it will not touch the encrypted
+# root would be misleading. dm-crypt drops discard unless crypttab carries the
+# `discard` option — an upstream SECURITY default we do not silently override.
+troot5="${TMP_ROOT}/trim-luks"
+mkdir -p "${troot5}/sys/block/nvme0n1/queue"
+echo 0 > "${troot5}/sys/block/nvme0n1/queue/rotational"
+_ensure_cronie() { :; }
+luks_out=$(TRIM_ROOT="${troot5}" TARGET_DISK=/dev/nvme0n1 LUKS_ENABLED=yes \
+    setup_periodic_trim 2>&1 || true)
+assert_true "encrypted install still gets the job" \
+    test -f "${troot5}/etc/cron.weekly/fstrim"
+assert_true "...and is told it will not trim the encrypted root" \
+    grep -q 'LUKS' <<< "${luks_out}"
+
+troot6="${TMP_ROOT}/trim-noluks"
+mkdir -p "${troot6}/sys/block/nvme0n1/queue"
+echo 0 > "${troot6}/sys/block/nvme0n1/queue/rotational"
+noluks_out=$(TRIM_ROOT="${troot6}" TARGET_DISK=/dev/nvme0n1 LUKS_ENABLED=no \
+    setup_periodic_trim 2>&1 || true)
+assert_false "no LUKS warning on an unencrypted install" \
+    grep -q 'LUKS' <<< "${noluks_out}"
+# NOT `unset -f`: bash has no function stack, so unsetting the stub drops the
+# real _ensure_cronie from lib/system.sh entirely, and every assertion below
+# would silently exercise a missing function. Re-source to restore it.
+source "${LIB_DIR}/system.sh"
+
+# _ensure_cronie itself: an empty implementation used to pass the whole suite,
+# because everything around it was either stubbed or asserted with a grep
+# (verified by mutation — 58/58 and 35/35 with the body replaced by `:`).
+#
+# Each case runs in a SUBSHELL with its own PATH: the machine running the tests
+# may well have crond installed (this one does), so leaving the real PATH in
+# place would exercise the opposite branch while looking correct. Results come
+# back through a file because a subshell cannot export variables upwards — and
+# because printf/>> are builtins, they work with an empty PATH.
+_cronie_log="${TMP_ROOT}/cronie.log"
+_fakebin="${TMP_ROOT}/fakebin"
+mkdir -p "${_fakebin}"
+
+_run_ensure_cronie() {
+    local path="$1"
+    : > "${_cronie_log}"
+    (
+        PATH="${path}"
+        try() { [[ "$*" == *cronie* ]] && printf 'installed\n' >> "${_cronie_log}"; return 0; }
+        _enable_service() { printf 'enabled:%s\n' "$1" >> "${_cronie_log}"; return 0; }
+        _ensure_cronie
+    ) >/dev/null 2>&1 || true
+}
+
+# crond absent
+_run_ensure_cronie "${_fakebin}"
+assert_true "installs cronie when crond is missing" grep -q '^installed$' "${_cronie_log}"
+assert_true "and enables the service" grep -q '^enabled:cronie$' "${_cronie_log}"
+
+# crond already present — no reinstall, but the service is still enabled, so a
+# second caller (snapper and TRIM both use this) is harmless.
+printf '#!/bin/sh\n' > "${_fakebin}/crond"
+chmod +x "${_fakebin}/crond"
+_run_ensure_cronie "${_fakebin}"
+assert_false "does not reinstall when crond is present" grep -q '^installed$' "${_cronie_log}"
+assert_true "but still enables the service (idempotent)" grep -q '^enabled:cronie$' "${_cronie_log}"
+
+# Wiring: a function nothing calls is a function that does nothing. install.sh is
+# the only caller, and no test looked at it.
+inst=$(cat "${SCRIPT_DIR}/install.sh")
+assert_true "install.sh calls setup_periodic_trim" \
+    grep -q 'setup_periodic_trim' <<< "${inst}"
+trim_line=$(grep -n 'setup_periodic_trim' <<< "${inst}" | head -1 | cut -d: -f1)
+fstab_line=$(grep -n 'generate_fstab' <<< "${inst}" | head -1 | cut -d: -f1)
+assert_true "...before fstab is generated (same phase, filesystems settled)" \
+    test "${trim_line}" -lt "${fstab_line}"
 
 # TRIM must not depend on snapshots being enabled — that was the whole point of
 # splitting cronie out of snapper_setup.
@@ -326,23 +415,28 @@ assert_true "and the TRIM path does too" \
 echo ""
 echo "=== console font: FONT= in /etc/rc.conf (Forgejo #21) ==="
 
-# `try` would run xbps-install for real; the font files are what the code checks,
-# so the stub just creates them — that also lets us test the case where the
-# install silently does not provide the requested face.
-try() { TRY_CALLED="${TRY_CALLED:-}${1};"; [[ -n "${_FONTS_APPEAR:-}" ]] && mkdir -p "${_FONT_DIR}" && touch "${_FONT_DIR}/${_FONTS_APPEAR}.psf.gz"; return 0; }
+# Stub the COMMAND, not try(): asserting on the description passed to try() would
+# pass for any command at all. This also mirrors the real code, which no longer
+# goes through try() — under --non-interactive try() calls die(), so a transient
+# mirror error while fetching a cosmetic package would abort the whole install.
+xbps-install() {
+    XBPS_ARGS="${XBPS_ARGS:-}$*;"
+    [[ -n "${_FONTS_APPEAR:-}" ]] && mkdir -p "${_FONT_DIR}" && touch "${_FONT_DIR}/${_FONTS_APPEAR}.psf.gz"
+    return "${_XBPS_RC:-0}"
+}
 
 # Empty CONSOLE_FONT is the pre-existing behaviour: touch nothing at all.
 croot0="${TMP_ROOT}/font-unset"
 mkdir -p "${croot0}/etc"
 printf 'KEYMAP="pl"\n' > "${croot0}/etc/rc.conf"
-TRY_CALLED=""
+XBPS_ARGS=""
 CONSOLE_ROOT="${croot0}" CONSOLE_FONT="" system_set_console_font >/dev/null 2>&1
 assert_false "no FONT= written when the user kept the default" \
     grep -q '^FONT=' "${croot0}/etc/rc.conf"
 # ...and it must return before doing ANY work. Without the early return the
 # function reaches the same end state by accident, but installs terminus-font on
 # the way — a package nobody asked for, on every install that kept the default.
-assert_eq "and nothing is installed for a font nobody asked for" "" "${TRY_CALLED}"
+assert_eq "and nothing is installed for a font nobody asked for" "" "${XBPS_ARGS}"
 
 # Normal case: font present in the target, FONT= written, KEYMAP untouched.
 croot1="${TMP_ROOT}/font-ok"
@@ -373,12 +467,36 @@ _FONT_DIR="${croot2}/usr/share/kbd/consolefonts"
 mkdir -p "${croot2}/etc"
 printf 'KEYMAP="pl"\n' > "${croot2}/etc/rc.conf"
 _FONTS_APPEAR=""
-TRY_CALLED=""
+XBPS_ARGS=""
 CONSOLE_ROOT="${croot2}" CONSOLE_FONT="ter-v99n" system_set_console_font >/dev/null 2>&1
 assert_false "no FONT= when the face is absent from the target" \
     grep -q '^FONT=' "${croot2}/etc/rc.conf"
 assert_true "...and terminus-font was at least attempted" \
-    grep -q 'terminus-font' <<< "${TRY_CALLED}"
+    grep -q 'terminus-font' <<< "${XBPS_ARGS}"
+
+# A failed package fetch must NOT be fatal — it is a cosmetic font, and the
+# validation above already copes with the face being absent.
+croot2b="${TMP_ROOT}/font-installfail"
+_FONT_DIR="${croot2b}/usr/share/kbd/consolefonts"
+mkdir -p "${croot2b}/etc"
+printf 'KEYMAP="pl"\n' > "${croot2b}/etc/rc.conf"
+_XBPS_RC=1
+rc=0
+CONSOLE_ROOT="${croot2b}" CONSOLE_FONT="ter-v28n" NON_INTERACTIVE=1 \
+    system_set_console_font >/dev/null 2>&1 || rc=$?
+assert_eq "failed font install does not abort the installer" "0" "${rc}"
+_XBPS_RC=0
+
+# A font name is used as a glob and as a sed replacement, and can arrive from a
+# hand-edited preset — not just the TUI list.
+croot2c="${TMP_ROOT}/font-glob"
+_FONT_DIR="${croot2c}/usr/share/kbd/consolefonts"
+mkdir -p "${croot2c}/etc" "${_FONT_DIR}"
+printf 'KEYMAP="pl"\n' > "${croot2c}/etc/rc.conf"
+touch "${_FONT_DIR}/ter-v28n.psf.gz"
+CONSOLE_ROOT="${croot2c}" CONSOLE_FONT="ter-v*" system_set_console_font >/dev/null 2>&1
+assert_false "a glob pattern is rejected, not written to rc.conf" \
+    grep -q '^FONT=' "${croot2c}/etc/rc.conf"
 
 # Package missing but the install provides the face: proceed.
 croot3="${TMP_ROOT}/font-installed"
@@ -390,7 +508,7 @@ CONSOLE_ROOT="${croot3}" CONSOLE_FONT="ter-v32n" system_set_console_font >/dev/n
 assert_true "font installed on demand then written" \
     grep -q '^FONT="ter-v32n"$' "${croot3}/etc/rc.conf"
 _FONTS_APPEAR=""
-unset -f try
+unset -f xbps-install
 
 # Suggestion scales with the panel — the whole point is the rescue console on a
 # HiDPI screen, so below 1920 we suggest nothing rather than install a package
@@ -413,6 +531,17 @@ assert_eq "1440p/Retina suggests 28" "ter-v28n" \
 proot3="${TMP_ROOT}/panel-1080"; _mk_panel "${proot3}" eDP-1 "1920x1080"
 assert_eq "1080p suggests 20" "ter-v20n" \
     "$(CONSOLE_ROOT="${proot3}" suggest_console_font)"
+
+# A PORTRAIT panel: UMPCs (GPD Pocket, MiniBook — hardware detect_umpc handles
+# explicitly) ship 1200x1920 screens. Judging by width alone calls the densest
+# display we support "low resolution" and suggests nothing, on exactly the
+# machine where the stock console font is least readable.
+proot3b="${TMP_ROOT}/panel-portrait"; _mk_panel "${proot3b}" DSI-1 "1200x1920"
+assert_eq "portrait UMPC panel is judged by its longest edge" "ter-v20n" \
+    "$(CONSOLE_ROOT="${proot3b}" suggest_console_font || true)"
+proot3c="${TMP_ROOT}/panel-portrait-4k"; _mk_panel "${proot3c}" DSI-1 "2160x3840"
+assert_eq "portrait 4K too" "ter-v32n" \
+    "$(CONSOLE_ROOT="${proot3c}" suggest_console_font || true)"
 
 proot4="${TMP_ROOT}/panel-small"; _mk_panel "${proot4}" eDP-1 "1366x768"
 assert_eq "a small panel suggests nothing" "" \

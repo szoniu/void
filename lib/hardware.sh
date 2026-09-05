@@ -276,24 +276,39 @@ _umpc_internal_panel_connector() {
     return 1
 }
 
-# _internal_panel_width — width in pixels of the internal panel's preferred mode
+# _internal_panel_longest_edge — the internal panel's longest edge, in pixels
 #
 # Deliberately separate from _umpc_internal_panel_connector() above: that one
 # answers a different question (is the panel PORTRAIT, and on which connector),
 # and folding the two would mean touching the UMPC rotation path for a cosmetic
 # feature. Same /sys/class/drm source and same "first line of modes is the
 # preferred one" assumption.
-_internal_panel_width() {
+_internal_panel_longest_edge() {
     local root="${CONSOLE_ROOT:-}"
-    local c status modes w
+    local c status modes w h
     for c in "${root}"/sys/class/drm/card*-eDP-* "${root}"/sys/class/drm/card*-DSI-* "${root}"/sys/class/drm/card*-LVDS-*; do
         [[ -d "${c}" && -f "${c}/status" && -f "${c}/modes" ]] || continue
-        read -r status < "${c}/status" 2>/dev/null || continue
+        # `|| [[ -n ... ]]`: read returns non-zero on a final line with no
+        # trailing newline. sysfs always terminates, but a one-character guard is
+        # cheaper than a silent "no panel detected" if that ever stops holding.
+        read -r status < "${c}/status" 2>/dev/null || [[ -n "${status}" ]] || continue
         [[ "${status}" == "connected" ]] || continue
-        read -r modes < "${c}/modes" 2>/dev/null || continue
+        read -r modes < "${c}/modes" 2>/dev/null || [[ -n "${modes}" ]] || continue
+
         w="${modes%%x*}"
-        [[ "${w}" =~ ^[0-9]+$ ]] || continue
-        echo "${w}"
+        h="${modes#*x}"; h="${h%%[^0-9]*}"
+        [[ "${w}" =~ ^[0-9]+$ && "${h}" =~ ^[0-9]+$ ]] || continue
+
+        # The LONGER edge, not the width. UMPCs (GPD Pocket, MiniBook — hardware
+        # this installer explicitly supports, see detect_umpc) ship panels whose
+        # native orientation is PORTRAIT: a 1200x1920 screen reports width 1200
+        # and would be judged low-resolution, when it is in fact the densest
+        # display we handle and the one where the stock console font is worst.
+        if (( h > w )); then
+            echo "${h}"
+        else
+            echo "${w}"
+        fi
         return 0
     done
     return 1
@@ -307,7 +322,7 @@ _internal_panel_width() {
 # install is not an improvement.
 suggest_console_font() {
     local width=""
-    width="$(_internal_panel_width 2>/dev/null)" || width=""
+    width="$(_internal_panel_longest_edge 2>/dev/null)" || width=""
 
     if [[ -z "${width}" ]]; then
         # No panel data (headless, VM, a connector the kernel does not expose).

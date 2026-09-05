@@ -140,12 +140,26 @@ system_set_console_font() {
 
     [[ -z "${font}" ]] && return 0
 
+    # The name reaches compgen -G as a GLOB and sed as a replacement, and it can
+    # arrive from a hand-edited preset or an inferred --resume config, not only
+    # from the TUI list. `ter-v*` would then match a face on disk, pass
+    # validation, and be written to rc.conf verbatim — where it means nothing.
+    if [[ ! "${font}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        ewarn "Console font name '${font}' contains unexpected characters — ignoring"
+        return 0
+    fi
+
     # terminus-font ships the ter-* faces; verified present in the Void index
     # (terminus-font 4.49.1). Without the package the name in rc.conf would
     # point at nothing.
     if [[ ! -d "${root}/usr/share/kbd/consolefonts" ]] ||
        ! compgen -G "${root}/usr/share/kbd/consolefonts/${font}.*" >/dev/null 2>&1; then
-        try "Installing terminus-font" xbps-install -y terminus-font
+        # NOT through try(): under --non-interactive try() calls die() on failure,
+        # so a transient mirror error while fetching a COSMETIC package would
+        # abort the whole install. The validation below already handles "the face
+        # is not there" gracefully, which is the same outcome — minus the abort.
+        xbps-install -y terminus-font >>"${LOG_FILE:-/dev/null}" 2>&1 ||
+            ewarn "Could not install terminus-font — continuing without a custom console font"
     fi
 
     # Validate against the TARGET system, not the live medium — the font list in
@@ -529,13 +543,38 @@ setup_periodic_trim() {
 #!/bin/sh
 # Weekly TRIM — installed by the Void installer.
 # runit has no fstrim.timer, so this is what keeps SSD write performance from
-# degrading. `-a` covers every mounted filesystem that supports discard and
-# silently skips the ones that do not.
-exec /usr/sbin/fstrim -av
+# degrading. `-a` covers every mounted filesystem that supports discard.
+#
+# Explicit PATH rather than an absolute binary path: cron runs with a minimal
+# environment, and hardcoding /usr/sbin/fstrim would break silently on a layout
+# where it is not there. A cron job that cannot find its binary fails quietly.
+#
+# --quiet-unsupported (util-linux >= 2.31) suppresses "the discard operation is
+# not supported" for filesystems that cannot trim. Without it every unsupported
+# mount writes to stderr once a week, and cron mails that to a root account
+# nobody reads — noise that trains you to ignore cron mail.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+exec fstrim --quiet-unsupported -av
 EOF
     chmod 0755 "${root}/etc/cron.weekly/fstrim"
 
     einfo "Weekly TRIM scheduled (/etc/cron.weekly/fstrim)"
+
+    # On an encrypted install the job runs but trims almost nothing, and saying
+    # "scheduled" without this would be misleading. dm-crypt does not pass
+    # discard through unless the mapping is opened with allow-discards, and our
+    # crypttab writes a bare `luks` options field (lib/luks.sh). That default is
+    # upstream's and it is a SECURITY choice, not an oversight: discard through
+    # dm-crypt leaks which blocks are in use and can reveal the filesystem type
+    # through the encryption layer. Turning it on silently, from a commit about
+    # a cron job, would change the security profile of an encrypted install
+    # without the user knowing — so this warns and leaves the decision to them.
+    if [[ "${LUKS_ENABLED:-no}" == "yes" ]]; then
+        ewarn "LUKS is enabled: the weekly job will NOT trim the encrypted root."
+        ewarn "dm-crypt blocks discard unless /etc/crypttab carries the 'discard' option,"
+        ewarn "which leaks the used-block map through the encryption layer — your call."
+    fi
 }
 
 # install_power_management — Laptop power management (battery-gated).
