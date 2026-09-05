@@ -189,6 +189,17 @@ validate_config() {
         errors+=("LUKS_ENABLED='${LUKS_ENABLED}' — must be yes or no")
     fi
 
+    if [[ "${LUKS_ALLOW_DISCARDS:-no}" != "no" && "${LUKS_ALLOW_DISCARDS:-no}" != "yes" ]]; then
+        errors+=("LUKS_ALLOW_DISCARDS='${LUKS_ALLOW_DISCARDS}' — must be yes or no")
+    fi
+
+    # A stale yes from a preset would otherwise sit in the config claiming a
+    # security trade-off that nothing acts on — the option only has meaning
+    # for a container this installer opens.
+    if [[ "${LUKS_ALLOW_DISCARDS:-no}" == "yes" && "${LUKS_ENABLED:-no}" != "yes" ]]; then
+        errors+=("LUKS_ALLOW_DISCARDS=yes requires LUKS_ENABLED=yes")
+    fi
+
     if [[ "${LUKS_ENABLED:-no}" == "yes" ]]; then
         # ROOT_PARTITION is the mapper device once LUKS is planned; the raw
         # partition must still be recorded, otherwise crypttab and the GRUB

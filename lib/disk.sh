@@ -228,9 +228,19 @@ _plan_luks_setup() {
             cryptsetup luksFormat --batch-mode --type luks1 --key-file - "${part}"
     fi
 
+    # The mapping created here is the one mkfs and the whole install run
+    # against. Opening it without --allow-discards would leave discard off for
+    # the entire installation even though the installed system will have it on
+    # (crypttab + cmdline, lib/luks.sh) — mkfs would then skip its initial
+    # discard, which is exactly the moment where it is worth the most.
+    local open_opts=""
+    if [[ "${LUKS_ALLOW_DISCARDS:-no}" == "yes" ]]; then
+        open_opts=" --allow-discards"
+    fi
+
     disk_plan_add_secret_stdin "Open LUKS container as /dev/mapper/${name}" \
         "${passphrase}" \
-        bash -c "if [ -b /dev/mapper/${name} ]; then echo 'already open'; else cryptsetup luksOpen --key-file - '${part}' '${name}'; fi"
+        bash -c "if [ -b /dev/mapper/${name} ]; then echo 'already open'; else cryptsetup luksOpen${open_opts} --key-file - '${part}' '${name}'; fi"
 
     # Second key slot holding a random keyfile, so the installed system asks
     # for the passphrase once (GRUB) instead of twice (GRUB + initramfs).
@@ -263,9 +273,16 @@ luks_open_for_resume() {
             "Enter the passphrase for the encrypted partition\n${part}:") || return 1
     fi
 
+    # Full `if`, not `[[ … ]] && …`: under set -e a false test would make the
+    # whole and-list return 1 and take the installer down with it.
+    local -a open_args=(luksOpen --key-file -)
+    if [[ "${LUKS_ALLOW_DISCARDS:-no}" == "yes" ]]; then
+        open_args+=(--allow-discards)
+    fi
+
     _VOID_SECRET_STDIN="${passphrase}" \
-        bash -c 'printf "%s" "${_VOID_SECRET_STDIN}" | cryptsetup luksOpen --key-file - "$1" "$2"' \
-        -- "${part}" "${name}" || return 1
+        bash -c 'printf "%s" "${_VOID_SECRET_STDIN}" | cryptsetup "${@:3}" "$1" "$2"' \
+        -- "${part}" "${name}" "${open_args[@]}" || return 1
 
     einfo "Opened LUKS container ${part} as /dev/mapper/${name}"
     return 0

@@ -38,6 +38,11 @@ screen_summary() {
     [[ "${ENABLE_SNAPPER:-no}" == "yes" ]] && summary+="Snapshots:    snapper + grub-btrfs (hourly timeline)\n"
     if [[ "${LUKS_ENABLED:-no}" == "yes" ]]; then
         summary+="Encryption:   LUKS on ${LUKS_PARTITION:-root} (passphrase at every boot)\n"
+        if [[ "${LUKS_ALLOW_DISCARDS:-no}" == "yes" ]]; then
+            summary+="              TRIM allowed — used-block map visible on the disk\n"
+        else
+            summary+="              TRIM off — weekly fstrim will not reach this disk\n"
+        fi
     fi
     [[ "${ENABLE_HYPRLAND:-no}" == "yes" ]] && summary+="Hyprland:     ecosystem enabled\n"
     [[ "${ENABLE_NIRI:-no}" == "yes" ]] && summary+="niri:         ecosystem enabled\n"

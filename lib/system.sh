@@ -607,19 +607,24 @@ EOF
 
     einfo "Weekly TRIM scheduled (/etc/cron.weekly/fstrim)"
 
-    # On an encrypted install the job runs but trims almost nothing, and saying
-    # "scheduled" without this would be misleading. dm-crypt does not pass
-    # discard through unless the mapping is opened with allow-discards, and our
-    # crypttab writes a bare `luks` options field (lib/luks.sh). That default is
-    # upstream's and it is a SECURITY choice, not an oversight: discard through
-    # dm-crypt leaks which blocks are in use and can reveal the filesystem type
-    # through the encryption layer. Turning it on silently, from a commit about
-    # a cron job, would change the security profile of an encrypted install
-    # without the user knowing — so this warns and leaves the decision to them.
+    # On an encrypted install the job trims almost nothing unless the user opted
+    # in, and saying "scheduled" without saying so would be misleading. dm-crypt
+    # does not pass discard through unless the mapping is opened with
+    # allow-discards; that default is upstream's and it is a SECURITY choice,
+    # not an oversight — discard through dm-crypt leaks which blocks are in use
+    # and can reveal the filesystem type through the encryption layer. Hence
+    # LUKS_ALLOW_DISCARDS, asked for explicitly on the encryption screen
+    # (lib/luks.sh does the wiring, verify_luks_discards checks the result).
     if [[ "${LUKS_ENABLED:-no}" == "yes" ]]; then
-        ewarn "LUKS is enabled: the weekly job will NOT trim the encrypted root."
-        ewarn "dm-crypt blocks discard unless /etc/crypttab carries the 'discard' option,"
-        ewarn "which leaks the used-block map through the encryption layer — your call."
+        if [[ "${LUKS_ALLOW_DISCARDS:-no}" == "yes" ]]; then
+            einfo "LUKS with discard allowed: the weekly job trims the encrypted root too."
+        else
+            ewarn "LUKS is enabled: the weekly job will NOT trim the encrypted root."
+            ewarn "To change that later you need BOTH 'luks,allow-discards' in /etc/crypttab"
+            ewarn "(dracut ignores systemd's 'discard' spelling) AND rd.luks.allow-discards"
+            ewarn "in GRUB_CMDLINE_LINUX, then dracut --force + grub-mkconfig. It leaks the"
+            ewarn "used-block map through the encryption layer — your call."
+        fi
     fi
 }
 

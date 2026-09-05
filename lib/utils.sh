@@ -1005,8 +1005,24 @@ _infer_luks_from_installed() {
             LUKS_PARTITION="${source_field}"
         fi
 
-        export LUKS_ENABLED LUKS_NAME LUKS_PARTITION
-        einfo "Inferred LUKS: ${LUKS_NAME} on ${LUKS_PARTITION:-unknown}"
+        # rest is "<keyfile> <options>"; the discard decision has to survive a
+        # resume, or the run would rewrite crypttab without it and silently
+        # revoke a choice the user already made.
+        #
+        # Both spellings count. The installer writes dracut's `allow-discards`,
+        # but the file may have been written by hand or by another distribution
+        # following systemd's crypttab(5), where the token is `discard` — and
+        # reading an existing decision is exactly where being liberal is right.
+        local options_field="${rest#* }"
+        local opts_normalized=",${options_field//[[:space:]]/},"
+        if [[ "${opts_normalized}" == *",allow-discards,"* || "${opts_normalized}" == *",discard,"* ]]; then
+            LUKS_ALLOW_DISCARDS="yes"
+        else
+            LUKS_ALLOW_DISCARDS="no"
+        fi
+
+        export LUKS_ENABLED LUKS_NAME LUKS_PARTITION LUKS_ALLOW_DISCARDS
+        einfo "Inferred LUKS: ${LUKS_NAME} on ${LUKS_PARTITION:-unknown} (discard: ${LUKS_ALLOW_DISCARDS})"
         break
     done < "${crypttab}"
 }
