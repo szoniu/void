@@ -582,6 +582,39 @@ cleanup_target_disk() {
     einfo "Cleanup of ${disk} complete"
 }
 
+# wait_for_block_device — wait until a device node actually exists
+#
+# udev creates nodes asynchronously after partprobe, so "the partition table is
+# written" and "the device node is usable" are two different moments. Returns 0
+# as soon as the node is there, non-zero if it never shows up within `timeout`
+# seconds (default 10) — so the caller can abort instead of formatting a path
+# that does not exist.
+#
+# udevadm is not on every live medium; the [[ -b ]] loop works without it, which
+# is why the settle call is tolerant and doubles as the delay when present.
+wait_for_block_device() {
+    local dev="$1"
+    local timeout="${2:-10}"
+    local waited=0
+
+    [[ -z "${dev}" ]] && return 0
+
+    while (( waited < timeout )); do
+        [[ -b "${dev}" ]] && return 0
+        # settle first (it returns as soon as the queue drains), re-check, and
+        # only then spend a second. Using settle AS the delay looked tidier but
+        # made the timeout meaningless: with an empty udev queue it returns
+        # instantly, so the whole loop burned through in microseconds and the
+        # helper degenerated into the very race it exists to remove.
+        udevadm settle --timeout=1 >/dev/null 2>&1 || true
+        [[ -b "${dev}" ]] && return 0
+        sleep 1
+        (( waited++ )) || true
+    done
+
+    [[ -b "${dev}" ]]
+}
+
 # disk_execute_plan — Execute all planned disk operations
 disk_execute_plan() {
     if [[ ${#DISK_ACTIONS[@]} -eq 0 ]]; then
@@ -632,7 +665,26 @@ disk_execute_plan() {
         else
             blockdev --rereadpt "${TARGET_DISK}" 2>/dev/null || true
         fi
-        sleep 2
+        # Wait for udev to create the nodes instead of guessing how long it takes.
+        # The old `sleep 2` was a race in both directions: on slower USB media or
+        # with more partitions udev could still be behind, and the next step of
+        # the plan (mkfs, cryptsetup luksFormat) would hit a device that is not
+        # there yet — while on a fast disk it burned two seconds every time.
+        local _part
+        for _part in "${ESP_PARTITION:-}" "${BOOT_PARTITION:-}" "${ROOT_PARTITION:-}" \
+                     "${SWAP_PARTITION:-}" "${LUKS_PARTITION:-}"; do
+            [[ -z "${_part}" ]] && continue
+            wait_for_block_device "${_part}" && continue
+
+            # Dual-boot is the one case where a missing node is expected rather
+            # than fatal: `sfdisk --append` may hand out a different number than
+            # planned, and the block right below detects the real one.
+            if [[ "${PARTITION_SCHEME:-}" == "dual-boot" && "${_part}" == "${ROOT_PARTITION:-}" ]]; then
+                ewarn "Partition ${_part} did not appear — will try to detect the actual one below"
+                continue
+            fi
+            die "Partition ${_part} did not appear after partprobe — the kernel has not picked up the new partition table. Continuing would format a device that does not exist."
+        done
 
         # Verify ROOT_PARTITION exists for dual-boot (sfdisk --append may assign different number)
         if [[ "${PARTITION_SCHEME:-}" == "dual-boot" && -n "${ROOT_PARTITION:-}" ]]; then

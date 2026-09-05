@@ -33,6 +33,28 @@ assert_eq() {
     fi
 }
 
+assert_true() {
+    local desc="$1"; shift
+    if "$@"; then
+        echo "  PASS: ${desc}"
+        (( PASS++ )) || true
+    else
+        echo "  FAIL: ${desc}"
+        (( FAIL++ )) || true
+    fi
+}
+
+assert_false() {
+    local desc="$1"; shift
+    if "$@"; then
+        echo "  FAIL: ${desc}"
+        (( FAIL++ )) || true
+    else
+        echo "  PASS: ${desc}"
+        (( PASS++ )) || true
+    fi
+}
+
 assert_contains() {
     local desc="$1" needle="$2" haystack="$3"
     if [[ "${haystack}" == *"${needle}"* ]]; then
@@ -126,6 +148,54 @@ assert_eq "Dry-run succeeds" "0" "$?"
 
 # Cleanup
 rm -f "${LOG_FILE}"
+
+echo ""
+echo "=== wait_for_block_device: wait for udev instead of guessing (Forgejo #19) ==="
+
+# A path that will never become a block device must fail — and fail within the
+# timeout, not hang. The point of the helper is that the caller can abort.
+start=$(date +%s)
+rc=0
+wait_for_block_device "/nonexistent/void-test-device" 2 || rc=$?
+elapsed=$(( $(date +%s) - start ))
+assert_eq "missing device reports failure" "1" "${rc}"
+# Both bounds matter: too long is a hang, too short means the loop is not
+# actually waiting — which is how the first version of this helper was broken
+# (udevadm settle returned instantly and the timeout became decorative).
+assert_true "actually waits for the timeout (took ${elapsed}s, expected >= 2)" \
+    test "${elapsed}" -ge 2
+assert_true "does not overshoot the timeout (took ${elapsed}s, budget 2s + slack)" \
+    test "${elapsed}" -le 8
+
+# An empty argument is a no-op, not a two-second stall: the caller passes
+# optional partitions (SWAP, LUKS) that may simply not be part of the plan.
+rc=0
+wait_for_block_device "" || rc=$?
+assert_eq "empty device is a no-op" "0" "${rc}"
+
+# Positive case against a real node, when the machine running the tests has one.
+real_dev=$(lsblk -dpno NAME 2>/dev/null | head -1 || true)
+if [[ -n "${real_dev}" && -b "${real_dev}" ]]; then
+    rc=0
+    wait_for_block_device "${real_dev}" 2 || rc=$?
+    assert_eq "existing device returns immediately (${real_dev})" "0" "${rc}"
+else
+    echo "  SKIP: no block device available to test the positive path"
+fi
+
+# The fixed `sleep 2` it replaced was a race in both directions — assert it is
+# gone from the execution path rather than trusting that nobody re-adds it.
+exec_fn=$(declare -f disk_execute_plan)
+assert_false "no fixed sleep left after partprobe" \
+    grep -q 'sleep 2' <<< "${exec_fn}"
+assert_true "every planned partition is waited for" \
+    grep -q 'wait_for_block_device' <<< "${exec_fn}"
+assert_true "a node that never appears aborts instead of formatting blind" \
+    grep -q 'did not appear after partprobe' <<< "${exec_fn}"
+# Dual-boot is the documented exception: sfdisk --append may renumber, and the
+# rescan below handles it, so that one path must warn rather than die.
+assert_true "dual-boot root partition stays non-fatal" \
+    grep -q 'will try to detect the actual one below' <<< "${exec_fn}"
 
 echo ""
 echo "=== Results ==="
