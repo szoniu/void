@@ -224,6 +224,15 @@ validate_config() {
     fi
 
     # Locale: xx_XX.UTF-8
+    # A console font name is used as a GLOB (compgen -G) and as a sed replacement
+    # in system_set_console_font. Catching it here means a bad value from a
+    # hand-edited preset or an inferred --resume config fails the pre-flight gate
+    # instead of silently doing nothing halfway through the chroot.
+    if [[ -n "${CONSOLE_FONT:-}" ]] && \
+       [[ ! "${CONSOLE_FONT}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        errors+=("CONSOLE_FONT='${CONSOLE_FONT}' — only letters, digits, dot, underscore and hyphen")
+    fi
+
     if [[ -n "${LOCALE:-}" ]] && \
        [[ ! "${LOCALE}" =~ ^[a-z]{2}_[A-Z]{2}\.UTF-8$ ]]; then
         errors+=("LOCALE='${LOCALE}' — must match xx_XX.UTF-8 format")

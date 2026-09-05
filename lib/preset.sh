@@ -14,6 +14,9 @@ readonly -a PRESET_HW_VARS=(
     ROOT_PARTITION
     SWAP_PARTITION
     ESP_REUSE
+    # Derived from THIS machine's panel resolution — a preset from a 4K MacBook
+    # would otherwise install terminus-font and set ter-v32n on a 1366x768 laptop.
+    CONSOLE_FONT
     BITLOCKER_DETECTED
     BITLOCKER_PARTITIONS
 )

@@ -366,42 +366,89 @@ source "${LIB_DIR}/system.sh"
 # back through a file because a subshell cannot export variables upwards — and
 # because printf/>> are builtins, they work with an empty PATH.
 _cronie_log="${TMP_ROOT}/cronie.log"
-_fakebin="${TMP_ROOT}/fakebin"
-mkdir -p "${_fakebin}"
 
+# Presence is detected by the SERVICE DIRECTORY, not a `crond` binary: Void ships
+# the daemon as /usr/bin/cronie-crond and creates `crond` through
+# xbps-alternatives at configure time, so `command -v crond` is false in a chroot
+# where the package is installed but not yet reconfigured — and true on a live
+# medium that has its own cron. /etc/sv/cronie is what _enable_service needs.
 _run_ensure_cronie() {
-    local path="$1"
+    local root="$1"
     : > "${_cronie_log}"
     (
-        PATH="${path}"
-        try() { [[ "$*" == *cronie* ]] && printf 'installed\n' >> "${_cronie_log}"; return 0; }
+        xbps-install() { printf 'installed:%s\n' "$*" >> "${_cronie_log}"; return "${_XBPS_RC:-0}"; }
         _enable_service() { printf 'enabled:%s\n' "$1" >> "${_cronie_log}"; return 0; }
-        _ensure_cronie
+        TRIM_ROOT="${root}" _ensure_cronie
     ) >/dev/null 2>&1 || true
 }
 
-# crond absent
-_run_ensure_cronie "${_fakebin}"
-assert_true "installs cronie when crond is missing" grep -q '^installed$' "${_cronie_log}"
+croot_nocron="${TMP_ROOT}/cronie-absent"
+mkdir -p "${croot_nocron}/etc/sv"
+_run_ensure_cronie "${croot_nocron}"
+assert_true "installs cronie when /etc/sv/cronie is absent" \
+    grep -q '^installed:.*cronie' "${_cronie_log}"
 assert_true "and enables the service" grep -q '^enabled:cronie$' "${_cronie_log}"
 
-# crond already present — no reinstall, but the service is still enabled, so a
-# second caller (snapper and TRIM both use this) is harmless.
-printf '#!/bin/sh\n' > "${_fakebin}/crond"
-chmod +x "${_fakebin}/crond"
-_run_ensure_cronie "${_fakebin}"
-assert_false "does not reinstall when crond is present" grep -q '^installed$' "${_cronie_log}"
-assert_true "but still enables the service (idempotent)" grep -q '^enabled:cronie$' "${_cronie_log}"
+croot_cron="${TMP_ROOT}/cronie-present"
+mkdir -p "${croot_cron}/etc/sv/cronie"
+_run_ensure_cronie "${croot_cron}"
+assert_false "does not reinstall when the service is already there" \
+    grep -q '^installed:' "${_cronie_log}"
+assert_true "but still enables it (snapper and TRIM both call this)" \
+    grep -q '^enabled:cronie$' "${_cronie_log}"
+
+# A failed fetch must degrade to "no periodic jobs", not abort the install —
+# this runs on the install path, where an abort costs a bootable system.
+_XBPS_RC=1
+_run_ensure_cronie "${croot_nocron}"
+_XBPS_RC=0
+assert_false "failed cronie install does not enable a service that is not there" \
+    grep -q '^enabled:' "${_cronie_log}"
+
+# anacron gate: /etc/cron.weekly on Void is driven by anacron, whose 0anacron
+# skips everything on battery unless this is set — and Void ships the line
+# commented out. On a laptop installer that is a silent no-op.
+aroot="${TMP_ROOT}/anacron-commented"
+mkdir -p "${aroot}/etc/default"
+printf '# ANACRON_RUN_ON_BATTERY_POWER=no\n' > "${aroot}/etc/default/anacron"
+TRIM_ROOT="${aroot}" _anacron_allow_on_battery >/dev/null 2>&1
+assert_true "battery gate opened when the setting is commented out" \
+    grep -qE '^ANACRON_RUN_ON_BATTERY_POWER=yes$' "${aroot}/etc/default/anacron"
+
+aroot2="${TMP_ROOT}/anacron-set-no"
+mkdir -p "${aroot2}/etc/default"
+printf 'ANACRON_RUN_ON_BATTERY_POWER=no\n' > "${aroot2}/etc/default/anacron"
+TRIM_ROOT="${aroot2}" _anacron_allow_on_battery >/dev/null 2>&1
+assert_eq "an explicit 'no' is replaced, not duplicated" "1" \
+    "$(grep -c '^ANACRON_RUN_ON_BATTERY_POWER=' "${aroot2}/etc/default/anacron")"
+assert_true "...and set to yes" \
+    grep -qE '^ANACRON_RUN_ON_BATTERY_POWER=yes$' "${aroot2}/etc/default/anacron"
+
+aroot3="${TMP_ROOT}/anacron-missing"
+mkdir -p "${aroot3}/etc"
+rc=0
+TRIM_ROOT="${aroot3}" _anacron_allow_on_battery >/dev/null 2>&1 || rc=$?
+assert_eq "missing /etc/default/anacron is survivable" "0" "${rc}"
+
+# ...and the gate has to actually be opened from the TRIM path — a helper nobody
+# calls leaves the weekly job dead on every laptop that runs unplugged.
+assert_true "setup_periodic_trim opens the anacron battery gate" \
+    grep -q '_anacron_allow_on_battery' <<< "$(declare -f setup_periodic_trim)"
 
 # Wiring: a function nothing calls is a function that does nothing. install.sh is
 # the only caller, and no test looked at it.
 inst=$(cat "${SCRIPT_DIR}/install.sh")
 assert_true "install.sh calls setup_periodic_trim" \
     grep -q 'setup_periodic_trim' <<< "${inst}"
+# ...and LAST in its phase. It is the only step there that hits the network, and
+# under --non-interactive a failed xbps-install aborts the installer: between
+# generate_fstab and luks_configure_system that would leave the target without
+# /etc/fstab or /etc/crypttab, i.e. unbootable, for the sake of a cron job.
 trim_line=$(grep -n 'setup_periodic_trim' <<< "${inst}" | head -1 | cut -d: -f1)
 fstab_line=$(grep -n 'generate_fstab' <<< "${inst}" | head -1 | cut -d: -f1)
-assert_true "...before fstab is generated (same phase, filesystems settled)" \
-    test "${trim_line}" -lt "${fstab_line}"
+luks_line=$(grep -n 'luks_configure_system' <<< "${inst}" | head -1 | cut -d: -f1)
+assert_true "...after fstab is generated" test "${trim_line}" -gt "${fstab_line}"
+assert_true "...and after crypttab is written" test "${trim_line}" -gt "${luks_line}"
 
 # TRIM must not depend on snapshots being enabled — that was the whole point of
 # splitting cronie out of snapper_setup.

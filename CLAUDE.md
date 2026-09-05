@@ -600,7 +600,7 @@ bash tests/test_system.sh        # Service enablement, sudo drop-in, chroot left
 bash tests/shellcheck.sh         # Static analysis / lint (needs shellcheck)
 ```
 
-All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 17 functional files (620 assertions) + `shellcheck.sh` (lints all 65 `.sh` files; needs `shellcheck` installed).
+All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 17 functional files (627 assertions) + `shellcheck.sh` (lints all 65 `.sh` files; needs `shellcheck` installed).
 
 ## Known patterns and pitfalls
 
@@ -638,7 +638,16 @@ All tests are standalone — they do not require root or hardware. They use `DRY
   WARNS that it will not trim the encrypted root — dm-crypt drops discard unless
   crypttab carries `discard`, and that default is upstream's SECURITY choice (discard
   leaks the used-block map through the encryption layer), not ours to flip silently
-  from a commit about a cron job.
+  from a commit about a cron job. `/etc/cron.weekly` on Void runs through ANACRON, whose
+  `0anacron` skips everything ON BATTERY unless `ANACRON_RUN_ON_BATTERY_POWER=yes` — and
+  Void ships that line commented out, so on a laptop installer the job would never fire.
+  `_anacron_allow_on_battery()` opens that gate (it also un-blocks the daily snapper
+  cleanup, which wants it for the same reason). `_ensure_cronie()` detects the package by
+  `/etc/sv/cronie`, NOT by `command -v crond`: Void ships the daemon as `cronie-crond` and
+  creates `crond` via xbps-alternatives at configure time. `setup_periodic_trim` is called
+  LAST in the fstab phase because it is the only network step there — an abort before
+  `generate_fstab`/`luks_configure_system` would leave the target unbootable for the sake
+  of a maintenance job.
 - **A BitLocker partition is an INVISIBLE Windows install.** Windows 11 24H2
   encrypts by default on consumer machines, and an encrypted volume cannot be
   mounted and has no readable `/Windows/System32` — so `_detect_ntfs_on_partition()`

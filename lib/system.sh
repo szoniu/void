@@ -484,10 +484,55 @@ _enable_service() {
 # install with snapshots disabled had nothing to run a periodic job with —
 # which is exactly the case where TRIM still matters.
 _ensure_cronie() {
-    if ! command -v crond >/dev/null 2>&1; then
-        try "Installing cronie" xbps-install -y cronie
+    local root="${TRIM_ROOT:-}"
+
+    # Check for the SERVICE directory, not for a `crond` binary. Void ships the
+    # daemon as /usr/bin/cronie-crond and creates `crond` through
+    # xbps-alternatives at package-configure time, so `command -v crond` can be
+    # false inside a chroot where the package is installed but not yet
+    # reconfigured — and false the other way round on a live medium that has its
+    # own cron. /etc/sv/cronie is what _enable_service actually needs.
+    if [[ ! -d "${root}/etc/sv/cronie" ]]; then
+        # NOT through try(): under --non-interactive try() calls die(), and this
+        # runs on the install path where an abort costs far more than a missing
+        # maintenance job. A failed fetch degrades to "no periodic TRIM", loudly.
+        xbps-install -y cronie >>"${LOG_FILE:-/dev/null}" 2>&1 || {
+            ewarn "Could not install cronie — periodic jobs (TRIM, snapshot cleanup) will not run"
+            return 0
+        }
     fi
     _enable_service "cronie"
+}
+
+# _anacron_allow_on_battery — let weekly jobs run when unplugged
+#
+# /etc/cron.weekly on Void is driven by ANACRON, not cron directly: the cronie
+# package builds with --enable-anacron and ships /etc/cron.hourly/0anacron, which
+# runs `anacron -s` — and that script exits early when the machine is on battery
+# unless ANACRON_RUN_ON_BATTERY_POWER=yes. Void's /etc/default/anacron ships that
+# line COMMENTED OUT, so the default is "skip on battery".
+#
+# This installer targets laptops (MacBooks, GPD/UMPC, Surface). A laptop that
+# mostly runs unplugged would therefore never trim, while the installer cheerfully
+# logged "Weekly TRIM scheduled" — a second silent no-op next to the LUKS one.
+# fstrim on an idle SSD costs a few seconds and negligible power, so enabling this
+# is the right trade for maintenance work. It also affects the daily snapper
+# cleanup, which wants to run for exactly the same reason.
+_anacron_allow_on_battery() {
+    local root="${TRIM_ROOT:-}"
+    local conf="${root}/etc/default/anacron"
+
+    [[ -f "${conf}" ]] || return 0
+
+    if grep -qE '^[[:space:]]*ANACRON_RUN_ON_BATTERY_POWER=' "${conf}"; then
+        sed -i 's|^[[:space:]]*ANACRON_RUN_ON_BATTERY_POWER=.*|ANACRON_RUN_ON_BATTERY_POWER=yes|' "${conf}"
+    else
+        printf '\n# Set by the Void installer: without this, anacron skips cron.weekly\n' >> "${conf}"
+        printf '# (and cron.daily) whenever the machine is on battery — on a laptop that\n' >> "${conf}"
+        printf '# means periodic TRIM and snapshot cleanup would effectively never run.\n' >> "${conf}"
+        printf 'ANACRON_RUN_ON_BATTERY_POWER=yes\n' >> "${conf}"
+    fi
+    einfo "  anacron: weekly jobs allowed on battery power"
 }
 
 # _disk_is_rotational — true for a spinning disk
@@ -537,6 +582,7 @@ setup_periodic_trim() {
     fi
 
     _ensure_cronie
+    _anacron_allow_on_battery
 
     mkdir -p "${root}/etc/cron.weekly"
     cat > "${root}/etc/cron.weekly/fstrim" << 'EOF'
