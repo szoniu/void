@@ -663,7 +663,13 @@ disk_execute_plan() {
             WINDOWS_DETECTED=0
             LINUX_DETECTED=0
             DETECTED_OSES_SERIALIZED=""
+            # BitLocker state describes partitions that no longer exist after the
+            # wipe; leaving it set would keep the encrypted-Windows warning in the
+            # summary and in the saved config for a disk that is now empty.
+            BITLOCKER_DETECTED=0
+            BITLOCKER_PARTITIONS=""
             export WINDOWS_DETECTED LINUX_DETECTED DETECTED_OSES_SERIALIZED
+            export BITLOCKER_DETECTED BITLOCKER_PARTITIONS
         fi
     fi
 

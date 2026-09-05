@@ -552,8 +552,14 @@ readonly _BITLOCKER_SIGNATURE="-FVE-FS-"
 _partition_has_bitlocker_signature() {
     local part="$1"
     [[ -r "${part}" ]] || return 1
+    # _timeout, because a raw read can block for a long time on removable media
+    # even after the TYPE=part filter (a stalled USB reader, a flaky disk).
     local sig
-    sig=$(dd if="${part}" bs=1 skip=3 count=8 2>/dev/null | tr -d '\0') || return 1
+    if command -v timeout >/dev/null 2>&1; then
+        sig=$(timeout 3 dd if="${part}" bs=1 skip=3 count=8 2>/dev/null | tr -d '\0') || return 1
+    else
+        sig=$(dd if="${part}" bs=1 skip=3 count=8 2>/dev/null | tr -d '\0') || return 1
+    fi
     [[ "${sig}" == "${_BITLOCKER_SIGNATURE}" ]]
 }
 
@@ -568,18 +574,33 @@ _partition_has_bitlocker_signature() {
 #
 # Called from detect_installed_oses(), which has already declared DETECTED_OSES.
 detect_bitlocker() {
-    BITLOCKER_DETECTED="${BITLOCKER_DETECTED:-0}"
-    BITLOCKER_PARTITIONS="${BITLOCKER_PARTITIONS:-}"
+    # Reset, do NOT inherit. Keeping the previous value looked harmless and is
+    # not: BITLOCKER_PARTITIONS is in CONFIG_VARS, so it travels in a preset and
+    # is restored by config_load BEFORE hardware detection runs. A stale path
+    # from another machine would then be skipped by the probe loop in
+    # detect_installed_oses(), hiding a real OS on that device — which also
+    # downgrades the "type ERASE" gate to a plain yes/no. Same on a second pass
+    # through screen_hw_detect, which the wizard's back navigation makes ordinary.
+    BITLOCKER_DETECTED=0
+    BITLOCKER_PARTITIONS=""
 
-    local part fstype is_bl
-    while IFS=' ' read -r part fstype; do
+    local part devtype fstype is_bl
+    while IFS=' ' read -r part devtype fstype; do
         [[ -z "${part}" ]] && continue
         is_bl=0
         case "${fstype,,}" in
             bitlocker) is_bl=1 ;;
             # No FSTYPE at all is the interesting case (old libblkid); ntfs is
             # checked too because BitLocker To Go keeps an NTFS-looking header.
-            ""|ntfs) _partition_has_bitlocker_signature "${part}" && is_bl=1 ;;
+            # Restricted to TYPE=part: without it the signature read fired on
+            # whole disks, loop devices, zram and the optical drive — and a read
+            # of LBA0 from a drive with a damaged or audio disc goes through
+            # kernel SCSI retries, freezing the hardware-detection screen for
+            # tens of seconds with nothing on screen to explain it.
+            ""|ntfs)
+                [[ "${devtype}" == "part" ]] &&
+                    _partition_has_bitlocker_signature "${part}" && is_bl=1
+                ;;
         esac
         [[ "${is_bl}" == "1" ]] || continue
 
@@ -588,7 +609,7 @@ detect_bitlocker() {
         DETECTED_OSES["${part}"]="Windows (BitLocker encrypted)"
         WINDOWS_DETECTED=1
         ewarn "BitLocker-encrypted partition: ${part} — Windows lives there even though nothing can read it"
-    done < <(lsblk -lno PATH,FSTYPE 2>/dev/null || true)
+    done < <(lsblk -lno PATH,TYPE,FSTYPE 2>/dev/null || true)
 
     export BITLOCKER_DETECTED BITLOCKER_PARTITIONS WINDOWS_DETECTED
 }
@@ -852,7 +873,15 @@ get_hardware_summary() {
         fi
         [[ "${APPLE_SPI_INPUT:-0}" == "1" ]] && summary+="    Keyboard/touchpad: SPI (applespi)\n"
         [[ "${MACOS_DETECTED:-0}" == "1" ]] && summary+="    macOS install: present on disk\n"
-        [[ "${BITLOCKER_DETECTED:-0}" == "1" ]] && summary+="    BitLocker: ENCRYPTED Windows partition(s) — cannot be shrunk from Linux\n"
+    fi
+    # NOT inside the Apple block — that is where this line first landed, so the
+    # warning showed up only on Macs, the one platform where BitLocker does not
+    # happen. It belongs with the general flags, on the consumer laptop the
+    # feature was written for.
+    if [[ "${BITLOCKER_DETECTED:-0}" == "1" ]]; then
+        summary+="  BitLocker: ENCRYPTED Windows partition(s) — cannot be shrunk from Linux\n"
+        summary+="    ${BITLOCKER_PARTITIONS:-?}\n"
+        summary+="    Shrink the volume in Windows (Disk Management) before installing\n"
     fi
     if [[ "${UMPC_DETECTED:-0}" == "1" ]]; then
         summary+="  UMPC: ${UMPC_VENDOR} ${UMPC_MODEL}\n"

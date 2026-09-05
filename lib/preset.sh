@@ -14,6 +14,8 @@ readonly -a PRESET_HW_VARS=(
     ROOT_PARTITION
     SWAP_PARTITION
     ESP_REUSE
+    BITLOCKER_DETECTED
+    BITLOCKER_PARTITIONS
 )
 
 # preset_export — Save configuration as a portable preset

@@ -242,8 +242,9 @@ echo "=== BitLocker detection (Forgejo #17) ==="
 # Case 1: libblkid new enough to name the type.
 lsblk() {
     cat << 'LSBLK'
-/dev/nvme0n1p1 vfat
-/dev/nvme0n1p3 BitLocker
+/dev/nvme0n1 disk
+/dev/nvme0n1p1 part vfat
+/dev/nvme0n1p3 part BitLocker
 LSBLK
 }
 declare -gA DETECTED_OSES=()
@@ -275,7 +276,7 @@ assert_false "plain NTFS is NOT mistaken for BitLocker" \
     _partition_has_bitlocker_signature "${NTFS_IMG}"
 
 lsblk() {
-    printf '%s \n' "${BL_IMG}"
+    printf '%s part \n' "${BL_IMG}"
 }
 declare -gA DETECTED_OSES=()
 WINDOWS_DETECTED=0
@@ -303,6 +304,88 @@ assert_true "BitLocker is not shrinkable" bitlocker_fstype_is_encrypted "BitLock
 assert_true "case-insensitive" bitlocker_fstype_is_encrypted "bitlocker"
 assert_false "plain ntfs stays shrinkable" bitlocker_fstype_is_encrypted "ntfs"
 assert_false "disk_can_shrink_fstype refuses BitLocker" disk_can_shrink_fstype "BitLocker"
+
+# Case 6: idempotency. The production caller does NOT reset these — the earlier
+# version of this test did, once per case, which is precisely what hid the bug:
+# detect_bitlocker inherited BITLOCKER_PARTITIONS instead of resetting it. That
+# matters twice over: the variable is in CONFIG_VARS, so it arrives from a
+# preset before hardware detection runs, and screen_hw_detect can be re-entered
+# via the wizard's back navigation. A stale path makes the probe loop skip that
+# device, hiding a real OS and downgrading the ERASE gate.
+lsblk() {
+    cat << 'LSBLK'
+/dev/nvme0n1p3 part BitLocker
+LSBLK
+}
+declare -gA DETECTED_OSES=()
+WINDOWS_DETECTED=0
+BITLOCKER_DETECTED=0
+BITLOCKER_PARTITIONS=""
+detect_bitlocker >/dev/null 2>&1
+detect_bitlocker >/dev/null 2>&1   # deliberately NOT resetting in between
+assert_eq "second scan does not duplicate entries" "/dev/nvme0n1p3" "${BITLOCKER_PARTITIONS}"
+
+# ...and a device that is no longer encrypted must disappear from the list,
+# rather than lingering and suppressing OS detection on that path.
+lsblk() {
+    cat << 'LSBLK'
+/dev/nvme0n1p3 part ntfs
+LSBLK
+}
+declare -gA DETECTED_OSES=()
+detect_bitlocker >/dev/null 2>&1
+assert_eq "stale partition drops out of the list" "" "${BITLOCKER_PARTITIONS}"
+assert_eq "stale flag is cleared too" "0" "${BITLOCKER_DETECTED}"
+
+# Case 7: the signature read must not touch whole disks, optical drives, loop or
+# zram devices — a raw read of LBA0 from a drive with a damaged disc goes through
+# kernel SCSI retries and freezes hardware detection with nothing on screen.
+PROBED=""
+_partition_has_bitlocker_signature() { PROBED+="$1 "; return 1; }
+lsblk() {
+    cat << 'LSBLK'
+/dev/sda disk
+/dev/sr0 rom
+/dev/loop0 loop
+/dev/zram0 disk
+/dev/sda1 part
+LSBLK
+}
+declare -gA DETECTED_OSES=()
+BITLOCKER_DETECTED=0
+BITLOCKER_PARTITIONS=""
+detect_bitlocker >/dev/null 2>&1
+assert_eq "signature probe only runs on partitions" "/dev/sda1 " "${PROBED}"
+unset -f _partition_has_bitlocker_signature
+unset -f lsblk
+
+# Case 8: state must not survive a wipe — after the auto scheme erases the disk,
+# those partitions are gone and the warning would describe a disk that is empty.
+wipe_fn=$(declare -f disk_execute_plan)
+assert_true "auto-wipe clears BitLocker state" \
+    grep -q 'BITLOCKER_DETECTED=0' <<< "${wipe_fn}"
+
+# Case 9: hardware summary must not hide the warning behind APPLE_DETECTED —
+# it first landed inside that block, so it showed up only on Macs, the one
+# platform where BitLocker does not happen.
+# Asserted on OUTPUT, not by parsing the function text: the nesting is the bug,
+# and the only thing that proves it is fixed is that a non-Apple machine actually
+# sees the line.
+APPLE_DETECTED=0
+BITLOCKER_DETECTED=1
+BITLOCKER_PARTITIONS="/dev/nvme0n1p3"
+# `set +u` inside the subshell: get_hardware_summary reads a long list of
+# hardware variables that a unit test does not populate, and the suite runs
+# with `set -u`. That is a property of the test harness, not of the code.
+summary_out=$( set +u; get_hardware_summary 2>/dev/null || true )
+assert_contains "warning shown on a non-Apple machine" "BitLocker" "${summary_out}"
+assert_contains "...and names the partition" "/dev/nvme0n1p3" "${summary_out}"
+
+BITLOCKER_DETECTED=0
+BITLOCKER_PARTITIONS=""
+summary_out=$( set +u; get_hardware_summary 2>/dev/null || true )
+assert_true "no warning when nothing is encrypted" \
+    test -z "$(grep -o 'BitLocker' <<< "${summary_out}" || true)"
 
 # Case 5: wiring. Detection is worthless if the scan does not call it, and the
 # probe loop must skip those partitions — an encrypted volume cannot be mounted,

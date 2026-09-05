@@ -107,6 +107,17 @@ Make sure you have a full backup before continuing." || true
             fi
         done < <(lsblk -lno NAME,SIZE,FSTYPE "${disk}" 2>/dev/null | tail -n +2)
 
+        # FSTYPE alone misses the case the signature fallback exists for: with an
+        # old libblkid the encrypted partition reports NO fstype, so the loop
+        # above cannot see it and the user would get the generic "unsupported
+        # filesystem" — in exactly the scenario the extra detection path was
+        # written to cover. detect_bitlocker() already worked this out, so use
+        # its result and treat fstype as the secondary signal.
+        local blp
+        for blp in ${BITLOCKER_PARTITIONS:-}; do
+            [[ "${blp}" == "${disk}"* ]] && has_bitlocker_fs=1 && break
+        done
+
         # BitLocker gets its own message for the same reason APFS does: the
         # generic "unsupported filesystem" sends the user hunting for a tool that
         # does not exist. ntfsresize cannot touch an encrypted volume — the fix

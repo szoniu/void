@@ -599,7 +599,7 @@ bash tests/test_peripherals.sh   # Peripheral opt-ins, resume recovery, Flatpak 
 bash tests/shellcheck.sh         # Static analysis / lint (needs shellcheck)
 ```
 
-All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 16 functional files (522 assertions) + `shellcheck.sh` (lints all 64 `.sh` files; needs `shellcheck` installed).
+All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 16 functional files (530 assertions) + `shellcheck.sh` (lints all 64 `.sh` files; needs `shellcheck` installed).
 
 ## Known patterns and pitfalls
 
@@ -624,6 +624,12 @@ All tests are standalone — they do not require root or hardware. They use `DRY
   flag is serialized, so a resumed install does not forget the disk is encrypted,
   and the shrink wizard says what to do in Windows instead of "unsupported
   filesystem" (`bitlocker_fstype_is_encrypted()`, mirroring `apple_fstype_is_macos()`).
+  State is RESET on every scan, not inherited: the variables are in CONFIG_VARS,
+  so a stale path arrives from a preset before detection runs — and the probe loop
+  skips whatever is listed, which would hide a real OS and downgrade the ERASE gate.
+  The signature read is restricted to `TYPE=part` and wrapped in a timeout, because
+  a raw LBA0 read from an optical drive with a damaged disc stalls hardware detection
+  for tens of seconds with nothing on screen.
   Same class of bug as macOS being invisible before APFS detection landed.
 - **`users` runs BEFORE `kernel`/`desktop`.** Those are the longest, most
   failure-prone phases; with `users` last, a desktop failure left root with the
