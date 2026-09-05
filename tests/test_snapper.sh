@@ -99,7 +99,15 @@ echo "=== runit services, not systemd timers ==="
 svc_fn=$(declare -f _snapper_enable_services)
 assert_contains "snapperd enabled"   'snapperd'    "${svc_fn}"
 assert_contains "grub-btrfs watcher enabled" 'grub-btrfs' "${svc_fn}"
-assert_contains "cronie enabled (runs the timeline job)" 'cronie' "${svc_fn}"
+# cronie moved OUT of _snapper_enable_services into the shared _ensure_cronie()
+# (Forgejo #23) — the weekly fstrim needs the same scheduler and must not depend
+# on snapshots being enabled to get one. The assertion still has to hold: the
+# snapper path guarantees a scheduler, otherwise the timeline job never fires.
+# Checked against snapper_setup, not the services helper, because `declare -f`
+# strips comments — a grep for 'cronie' in the helper would only be matching the
+# note that says where it went.
+setup_fn=$(declare -f snapper_setup)
+assert_contains "cronie ensured (runs the timeline job)" '_ensure_cronie' "${setup_fn}"
 
 cron_fn=$(declare -f _snapper_write_cron_jobs)
 assert_contains "hourly timeline job"    "/etc/cron.hourly/snapper-timeline" "${cron_fn}"
