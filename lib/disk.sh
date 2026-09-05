@@ -582,6 +582,73 @@ cleanup_target_disk() {
     einfo "Cleanup of ${disk} complete"
 }
 
+# wait_for_block_device — wait until a device node actually exists
+#
+# udev creates nodes asynchronously after partprobe, so "the partition table is
+# written" and "the device node is usable" are two different moments. Returns 0
+# as soon as the node is there, non-zero if it never shows up within `timeout`
+# seconds (default 10) — so the caller can abort instead of formatting a path
+# that does not exist.
+#
+# udevadm is not on every live medium; the [[ -b ]] loop works without it, which
+# is why the settle call is tolerant and doubles as the delay when present.
+wait_for_block_device() {
+    local dev="$1"
+    local timeout="${2:-10}"
+    local waited=0
+
+    [[ -z "${dev}" ]] && return 0
+
+    while (( waited < timeout )); do
+        [[ -b "${dev}" ]] && return 0
+        # settle first (it returns as soon as the queue drains), re-check, and
+        # only then spend a second. Using settle AS the delay looked tidier but
+        # made the timeout meaningless: with an empty udev queue it returns
+        # instantly, so the whole loop burned through in microseconds and the
+        # helper degenerated into the very race it exists to remove.
+        udevadm settle --timeout=1 >/dev/null 2>&1 || true
+        [[ -b "${dev}" ]] && return 0
+        sleep 1
+        (( waited++ )) || true
+    done
+
+    [[ -b "${dev}" ]]
+}
+
+# _reread_partition_table — make the kernel pick up a freshly written table
+_reread_partition_table() {
+    if command -v partprobe &>/dev/null; then
+        partprobe "${TARGET_DISK}" 2>/dev/null || true
+    else
+        blockdev --rereadpt "${TARGET_DISK}" 2>/dev/null || true
+    fi
+}
+
+# _wait_for_planned_partitions — block until every partition in the plan exists
+#
+# Split out of disk_execute_plan so it can be tested for real: the caller runs
+# only under DRY_RUN=0, where exercising it in place would mean letting sfdisk
+# and mkfs loose on a device. Review found the original assertions were greps
+# over `declare -f`, which passed even after the loop was narrowed to the ESP
+# alone — i.e. exactly the regression this code exists to prevent.
+_wait_for_planned_partitions() {
+    local _part
+    for _part in "${ESP_PARTITION:-}" "${BOOT_PARTITION:-}" "${ROOT_PARTITION:-}" \
+                 "${SWAP_PARTITION:-}" "${LUKS_PARTITION:-}"; do
+        [[ -z "${_part}" ]] && continue
+        wait_for_block_device "${_part}" && continue
+
+        # Dual-boot is the one case where a missing node is expected rather
+        # than fatal: `sfdisk --append` may hand out a different number than
+        # planned, and disk_execute_plan detects the real one right after.
+        if [[ "${PARTITION_SCHEME:-}" == "dual-boot" && "${_part}" == "${ROOT_PARTITION:-}" ]]; then
+            ewarn "Partition ${_part} did not appear — will try to detect the actual one below"
+            continue
+        fi
+        die "Partition ${_part} did not appear after partprobe — the kernel has not picked up the new partition table. The next step would operate on a device that does not exist."
+    done
+}
+
 # disk_execute_plan — Execute all planned disk operations
 disk_execute_plan() {
     if [[ ${#DISK_ACTIONS[@]} -eq 0 ]]; then
@@ -623,16 +690,24 @@ disk_execute_plan() {
         else
             try "${desc}" bash -c "${cmd}"
         fi
+
+        # The race is HERE, not after the loop. sfdisk writes the table and the
+        # very next action (mkfs.vfat on the ESP, cryptsetup luksFormat) opens a
+        # node udev may not have created yet — both are entries in this same
+        # DISK_ACTIONS list. Waiting once the whole plan has run, which is what
+        # the old `sleep 2` did and what the first version of this fix kept
+        # doing, arrives after the formatting it was meant to protect.
+        if [[ "${DRY_RUN}" != "1" && "${cmd}" == *sfdisk* ]]; then
+            _reread_partition_table
+            _wait_for_planned_partitions
+        fi
     done
 
-    # Ensure kernel recognizes new partitions
+    # Second pass, after every action: dual-boot renumbering (below) needs a
+    # settled table, and a plan that never touched sfdisk still has to see nodes.
     if [[ "${DRY_RUN}" != "1" ]]; then
-        if command -v partprobe &>/dev/null; then
-            partprobe "${TARGET_DISK}" 2>/dev/null || true
-        else
-            blockdev --rereadpt "${TARGET_DISK}" 2>/dev/null || true
-        fi
-        sleep 2
+        _reread_partition_table
+        _wait_for_planned_partitions
 
         # Verify ROOT_PARTITION exists for dual-boot (sfdisk --append may assign different number)
         if [[ "${PARTITION_SCHEME:-}" == "dual-boot" && -n "${ROOT_PARTITION:-}" ]]; then
