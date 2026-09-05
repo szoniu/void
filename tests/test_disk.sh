@@ -230,6 +230,22 @@ assert_contains "dual-boot exception does NOT extend to the ESP" "DIED:" "${out}
 unset -f wait_for_block_device die
 _MISSING_DEV=""
 
+# The wait has to happen INSIDE the action loop, right after sfdisk — not once
+# the whole plan has run. mkfs.vfat / cryptsetup luksFormat are entries in that
+# same DISK_ACTIONS list, so a check that runs after the loop arrives after the
+# formatting it exists to protect (this is what the original fix got wrong, and
+# what the `sleep 2` before it got wrong too).
+exec_fn=$(declare -f disk_execute_plan)
+sfdisk_gate=$(grep -n 'sfdisk\*' <<< "${exec_fn}" | head -1 | cut -d: -f1 || true)
+first_wait=$(grep -n '_wait_for_planned_partitions' <<< "${exec_fn}" | head -1 | cut -d: -f1 || true)
+wait_count=$(grep -c '_wait_for_planned_partitions' <<< "${exec_fn}" || true)
+assert_true "there is a wait gated on the partition-table write" \
+    test -n "${sfdisk_gate}"
+assert_true "that gate comes BEFORE the first wait (i.e. inside the action loop)" \
+    test "${sfdisk_gate}" -lt "${first_wait}"
+assert_eq "and a second pass after the loop, for dual-boot renumbering" "2" "${wait_count}"
+
+
 echo ""
 echo "=== Results ==="
 echo "Passed: ${PASS}"

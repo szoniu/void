@@ -615,6 +615,15 @@ wait_for_block_device() {
     [[ -b "${dev}" ]]
 }
 
+# _reread_partition_table — make the kernel pick up a freshly written table
+_reread_partition_table() {
+    if command -v partprobe &>/dev/null; then
+        partprobe "${TARGET_DISK}" 2>/dev/null || true
+    else
+        blockdev --rereadpt "${TARGET_DISK}" 2>/dev/null || true
+    fi
+}
+
 # _wait_for_planned_partitions — block until every partition in the plan exists
 #
 # Split out of disk_execute_plan so it can be tested for real: the caller runs
@@ -636,7 +645,7 @@ _wait_for_planned_partitions() {
             ewarn "Partition ${_part} did not appear — will try to detect the actual one below"
             continue
         fi
-        die "Partition ${_part} did not appear after partprobe — the kernel has not picked up the new partition table. Continuing would format a device that does not exist."
+        die "Partition ${_part} did not appear after partprobe — the kernel has not picked up the new partition table. The next step would operate on a device that does not exist."
     done
 }
 
@@ -681,15 +690,23 @@ disk_execute_plan() {
         else
             try "${desc}" bash -c "${cmd}"
         fi
+
+        # The race is HERE, not after the loop. sfdisk writes the table and the
+        # very next action (mkfs.vfat on the ESP, cryptsetup luksFormat) opens a
+        # node udev may not have created yet — both are entries in this same
+        # DISK_ACTIONS list. Waiting once the whole plan has run, which is what
+        # the old `sleep 2` did and what the first version of this fix kept
+        # doing, arrives after the formatting it was meant to protect.
+        if [[ "${DRY_RUN}" != "1" && "${cmd}" == *sfdisk* ]]; then
+            _reread_partition_table
+            _wait_for_planned_partitions
+        fi
     done
 
-    # Ensure kernel recognizes new partitions
+    # Second pass, after every action: dual-boot renumbering (below) needs a
+    # settled table, and a plan that never touched sfdisk still has to see nodes.
     if [[ "${DRY_RUN}" != "1" ]]; then
-        if command -v partprobe &>/dev/null; then
-            partprobe "${TARGET_DISK}" 2>/dev/null || true
-        else
-            blockdev --rereadpt "${TARGET_DISK}" 2>/dev/null || true
-        fi
+        _reread_partition_table
         _wait_for_planned_partitions
 
         # Verify ROOT_PARTITION exists for dual-boot (sfdisk --append may assign different number)
