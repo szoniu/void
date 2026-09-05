@@ -276,6 +276,54 @@ _umpc_internal_panel_connector() {
     return 1
 }
 
+# _internal_panel_width — width in pixels of the internal panel's preferred mode
+#
+# Deliberately separate from _umpc_internal_panel_connector() above: that one
+# answers a different question (is the panel PORTRAIT, and on which connector),
+# and folding the two would mean touching the UMPC rotation path for a cosmetic
+# feature. Same /sys/class/drm source and same "first line of modes is the
+# preferred one" assumption.
+_internal_panel_width() {
+    local root="${CONSOLE_ROOT:-}"
+    local c status modes w
+    for c in "${root}"/sys/class/drm/card*-eDP-* "${root}"/sys/class/drm/card*-DSI-* "${root}"/sys/class/drm/card*-LVDS-*; do
+        [[ -d "${c}" && -f "${c}/status" && -f "${c}/modes" ]] || continue
+        read -r status < "${c}/status" 2>/dev/null || continue
+        [[ "${status}" == "connected" ]] || continue
+        read -r modes < "${c}/modes" 2>/dev/null || continue
+        w="${modes%%x*}"
+        [[ "${w}" =~ ^[0-9]+$ ]] || continue
+        echo "${w}"
+        return 0
+    done
+    return 1
+}
+
+# suggest_console_font — a readable default for this panel, or empty
+#
+# The point of the feature is the rescue console on a HiDPI screen, so the
+# suggestion scales with the panel's horizontal resolution. Below 1920 the
+# stock VGA font is fine and we suggest nothing — an unnecessary terminus-font
+# install is not an improvement.
+suggest_console_font() {
+    local width=""
+    width="$(_internal_panel_width 2>/dev/null)" || width=""
+
+    if [[ -z "${width}" ]]; then
+        # No panel data (headless, VM, a connector the kernel does not expose).
+        # A Mac is worth guessing for anyway: every model this installer
+        # supports has a Retina panel.
+        [[ "${APPLE_DETECTED:-0}" == "1" ]] && { echo "ter-v28n"; return 0; }
+        return 1
+    fi
+
+    if   (( width >= 3200 )); then echo "ter-v32n"
+    elif (( width >= 2560 )); then echo "ter-v28n"
+    elif (( width >= 1920 )); then echo "ter-v20n"
+    else return 1
+    fi
+}
+
 detect_umpc() {
     UMPC_DETECTED=0
     UMPC_VENDOR=""

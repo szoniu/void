@@ -25,6 +25,8 @@ source "${LIB_DIR}/utils.sh"
 source "${LIB_DIR}/dialog.sh"
 source "${LIB_DIR}/config.sh"
 source "${LIB_DIR}/chroot.sh"
+source "${DATA_DIR}/gpu_database.sh"
+source "${LIB_DIR}/hardware.sh"
 source "${LIB_DIR}/snapper.sh"
 source "${LIB_DIR}/system.sh"
 
@@ -320,6 +322,119 @@ assert_true "snapper goes through the shared helper" \
     grep -q '_ensure_cronie' <<< "$(declare -f snapper_setup)"
 assert_true "and the TRIM path does too" \
     grep -q '_ensure_cronie' <<< "$(declare -f setup_periodic_trim)"
+
+echo ""
+echo "=== console font: FONT= in /etc/rc.conf (Forgejo #21) ==="
+
+# `try` would run xbps-install for real; the font files are what the code checks,
+# so the stub just creates them — that also lets us test the case where the
+# install silently does not provide the requested face.
+try() { TRY_CALLED="${TRY_CALLED:-}${1};"; [[ -n "${_FONTS_APPEAR:-}" ]] && mkdir -p "${_FONT_DIR}" && touch "${_FONT_DIR}/${_FONTS_APPEAR}.psf.gz"; return 0; }
+
+# Empty CONSOLE_FONT is the pre-existing behaviour: touch nothing at all.
+croot0="${TMP_ROOT}/font-unset"
+mkdir -p "${croot0}/etc"
+printf 'KEYMAP="pl"\n' > "${croot0}/etc/rc.conf"
+TRY_CALLED=""
+CONSOLE_ROOT="${croot0}" CONSOLE_FONT="" system_set_console_font >/dev/null 2>&1
+assert_false "no FONT= written when the user kept the default" \
+    grep -q '^FONT=' "${croot0}/etc/rc.conf"
+# ...and it must return before doing ANY work. Without the early return the
+# function reaches the same end state by accident, but installs terminus-font on
+# the way — a package nobody asked for, on every install that kept the default.
+assert_eq "and nothing is installed for a font nobody asked for" "" "${TRY_CALLED}"
+
+# Normal case: font present in the target, FONT= written, KEYMAP untouched.
+croot1="${TMP_ROOT}/font-ok"
+_FONT_DIR="${croot1}/usr/share/kbd/consolefonts"
+mkdir -p "${croot1}/etc" "${_FONT_DIR}"
+printf 'KEYMAP="pl"\n' > "${croot1}/etc/rc.conf"
+touch "${_FONT_DIR}/ter-v28n.psf.gz"
+CONSOLE_ROOT="${croot1}" CONSOLE_FONT="ter-v28n" system_set_console_font >/dev/null 2>&1
+assert_true "FONT= written to rc.conf" grep -q '^FONT="ter-v28n"$' "${croot1}/etc/rc.conf"
+assert_true "KEYMAP left alone" grep -q '^KEYMAP="pl"$' "${croot1}/etc/rc.conf"
+
+# Replacing an existing FONT= must not append a second line — two FONT= entries
+# would leave which one wins up to the shell that sources rc.conf.
+# The face has to exist first: without it the function correctly refuses, the
+# file keeps its single old FONT= line, and the "not duplicated" assertion would
+# pass for the wrong reason.
+touch "${_FONT_DIR}/ter-v20n.psf.gz"
+CONSOLE_ROOT="${croot1}" CONSOLE_FONT="ter-v20n" system_set_console_font >/dev/null 2>&1
+assert_eq "existing FONT= replaced, not duplicated" "1" \
+    "$(grep -c '^FONT=' "${croot1}/etc/rc.conf")"
+assert_true "new value took effect" grep -q '^FONT="ter-v20n"$' "${croot1}/etc/rc.conf"
+
+# The font is missing and the install does not provide it: warn and write
+# NOTHING. A FONT= pointing at a face that is not there leaves the rescue
+# console broken — the exact failure this feature exists to prevent.
+croot2="${TMP_ROOT}/font-missing"
+_FONT_DIR="${croot2}/usr/share/kbd/consolefonts"
+mkdir -p "${croot2}/etc"
+printf 'KEYMAP="pl"\n' > "${croot2}/etc/rc.conf"
+_FONTS_APPEAR=""
+TRY_CALLED=""
+CONSOLE_ROOT="${croot2}" CONSOLE_FONT="ter-v99n" system_set_console_font >/dev/null 2>&1
+assert_false "no FONT= when the face is absent from the target" \
+    grep -q '^FONT=' "${croot2}/etc/rc.conf"
+assert_true "...and terminus-font was at least attempted" \
+    grep -q 'terminus-font' <<< "${TRY_CALLED}"
+
+# Package missing but the install provides the face: proceed.
+croot3="${TMP_ROOT}/font-installed"
+_FONT_DIR="${croot3}/usr/share/kbd/consolefonts"
+mkdir -p "${croot3}/etc"
+printf 'KEYMAP="pl"\n' > "${croot3}/etc/rc.conf"
+_FONTS_APPEAR="ter-v32n"
+CONSOLE_ROOT="${croot3}" CONSOLE_FONT="ter-v32n" system_set_console_font >/dev/null 2>&1
+assert_true "font installed on demand then written" \
+    grep -q '^FONT="ter-v32n"$' "${croot3}/etc/rc.conf"
+_FONTS_APPEAR=""
+unset -f try
+
+# Suggestion scales with the panel — the whole point is the rescue console on a
+# HiDPI screen, so below 1920 we suggest nothing rather than install a package
+# for no reason.
+_mk_panel() {
+    local root="$1" conn="$2" mode="$3"
+    mkdir -p "${root}/sys/class/drm/card0-${conn}"
+    echo connected > "${root}/sys/class/drm/card0-${conn}/status"
+    echo "${mode}" > "${root}/sys/class/drm/card0-${conn}/modes"
+}
+
+proot1="${TMP_ROOT}/panel-4k"; _mk_panel "${proot1}" eDP-1 "3840x2160"
+assert_eq "4K panel suggests the largest face" "ter-v32n" \
+    "$(CONSOLE_ROOT="${proot1}" suggest_console_font)"
+
+proot2="${TMP_ROOT}/panel-1440"; _mk_panel "${proot2}" eDP-1 "2560x1600"
+assert_eq "1440p/Retina suggests 28" "ter-v28n" \
+    "$(CONSOLE_ROOT="${proot2}" suggest_console_font)"
+
+proot3="${TMP_ROOT}/panel-1080"; _mk_panel "${proot3}" eDP-1 "1920x1080"
+assert_eq "1080p suggests 20" "ter-v20n" \
+    "$(CONSOLE_ROOT="${proot3}" suggest_console_font)"
+
+proot4="${TMP_ROOT}/panel-small"; _mk_panel "${proot4}" eDP-1 "1366x768"
+assert_eq "a small panel suggests nothing" "" \
+    "$(CONSOLE_ROOT="${proot4}" suggest_console_font || true)"
+
+# A disconnected panel must not be read — an unplugged eDP still has a modes file.
+proot5="${TMP_ROOT}/panel-off"; _mk_panel "${proot5}" eDP-1 "3840x2160"
+echo disconnected > "${proot5}/sys/class/drm/card0-eDP-1/status"
+assert_eq "disconnected panel is ignored" "" \
+    "$(CONSOLE_ROOT="${proot5}" APPLE_DETECTED=0 suggest_console_font || true)"
+
+# No panel data at all (VM, headless, a connector the kernel hides): a Mac is
+# still worth guessing for, since every supported model has a Retina panel.
+proot6="${TMP_ROOT}/panel-none"; mkdir -p "${proot6}/sys/class/drm"
+assert_eq "Apple with no panel data still gets a readable font" "ter-v28n" \
+    "$(CONSOLE_ROOT="${proot6}" APPLE_DETECTED=1 suggest_console_font || true)"
+assert_eq "non-Apple with no panel data gets no suggestion" "" \
+    "$(CONSOLE_ROOT="${proot6}" APPLE_DETECTED=0 suggest_console_font || true)"
+
+# Wiring: the font has to be applied where the keymap is, or nothing calls it.
+assert_true "system_set_keymap applies the console font too" \
+    grep -q 'system_set_console_font' <<< "$(declare -f system_set_keymap)"
 
 rm -f "${LOG_FILE}"
 

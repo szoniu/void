@@ -104,6 +104,62 @@ system_set_keymap() {
     echo "KEYMAP=${keymap}" > /etc/vconsole.conf
 
     einfo "Keymap set to ${keymap}"
+
+    system_set_console_font
+}
+
+# _rc_conf_set — set KEY="value" in /etc/rc.conf, anchored
+#
+# Same shape as the KEYMAP handling above: replace an existing line or append
+# one. Anchored on ^KEY= so a partial name cannot match a different setting.
+_rc_conf_set() {
+    local root="${CONSOLE_ROOT:-}"
+    local rc="${root}/etc/rc.conf"
+    local key="$1" value="$2"
+
+    if [[ -f "${rc}" ]] && grep -q "^${key}=" "${rc}"; then
+        sed -i "s|^${key}=.*|${key}=\"${value}\"|" "${rc}"
+    else
+        mkdir -p "${root}/etc"
+        printf '%s="%s"\n' "${key}" "${value}" >> "${rc}"
+    fi
+}
+
+# system_set_console_font — console font via FONT= in /etc/rc.conf
+#
+# Void reads FONT= from the same file as KEYMAP. On a 4K/Retina panel — every
+# MacBook this installer supports, among others — the default VGA font is
+# effectively unreadable, and that is precisely the screen you end up on when
+# the graphical session refuses to start.
+#
+# Empty CONSOLE_FONT means "leave it alone", which is the behaviour before this
+# existed, so nothing changes for anyone who does not ask for it.
+system_set_console_font() {
+    local root="${CONSOLE_ROOT:-}"
+    local font="${CONSOLE_FONT:-}"
+
+    [[ -z "${font}" ]] && return 0
+
+    # terminus-font ships the ter-* faces; verified present in the Void index
+    # (terminus-font 4.49.1). Without the package the name in rc.conf would
+    # point at nothing.
+    if [[ ! -d "${root}/usr/share/kbd/consolefonts" ]] ||
+       ! compgen -G "${root}/usr/share/kbd/consolefonts/${font}.*" >/dev/null 2>&1; then
+        try "Installing terminus-font" xbps-install -y terminus-font
+    fi
+
+    # Validate against the TARGET system, not the live medium — the font list in
+    # the TUI is hard-coded (the live ISO cannot see what the install will have),
+    # so this is the first point where the name can actually be checked. A bad
+    # FONT= is not fatal at boot, but it silently leaves the console unreadable,
+    # which is the exact thing this is meant to fix.
+    if ! compgen -G "${root}/usr/share/kbd/consolefonts/${font}.*" >/dev/null 2>&1; then
+        ewarn "Console font '${font}' not found in the target — leaving FONT unset"
+        return 0
+    fi
+
+    _rc_conf_set FONT "${font}"
+    einfo "Console font set to ${font}"
 }
 
 # generate_fstab — Generate /etc/fstab

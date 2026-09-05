@@ -67,6 +67,50 @@ Tip: Run 'ls /usr/share/zoneinfo/' to see available zones." \
     KEYMAP="${keymap_choice}"
     export KEYMAP
 
-    einfo "Timezone: ${TIMEZONE}, Locale: ${LOCALE}, Keymap: ${KEYMAP}"
+    # Console font. Lives here because it is the same file (/etc/rc.conf) and the
+    # same kind of decision as the keymap. The list is hard-coded on purpose: the
+    # names come from /usr/share/kbd/consolefonts in the TARGET system, which the
+    # live medium cannot enumerate — system_set_console_font() validates the pick
+    # in the chroot, where the answer actually exists.
+    local suggested=""
+    if declare -F suggest_console_font >/dev/null; then
+        suggested="$(suggest_console_font 2>/dev/null)" || suggested=""
+    fi
+
+    # dialog_menu takes a title and then tag/description PAIRS — there is no
+    # prompt parameter (checked in lib/dialog.sh), so the guidance goes into the
+    # title and the descriptions, and the suggestion is marked on its own row.
+    local font_title="Console Font"
+    [[ -n "${suggested}" ]] && font_title+=" — panel suggests ${suggested}"
+
+    local -a font_items=(
+        "default"  "Keep the stock VGA font (no change)"
+        "ter-v16n" "Terminus 16 — small"
+        "ter-v20n" "Terminus 20 — 1080p"
+        "ter-v24n" "Terminus 24 — large"
+        "ter-v28n" "Terminus 28 — 1440p / Retina"
+        "ter-v32n" "Terminus 32 — 4K"
+    )
+    # Mark the suggested row so the hint is visible where the choice is made,
+    # not only in the title.
+    local i
+    for (( i = 0; i < ${#font_items[@]}; i += 2 )); do
+        if [[ -n "${suggested}" && "${font_items[i]}" == "${suggested}" ]]; then
+            font_items[i+1]+="  (suggested)"
+        fi
+    done
+
+    local font_choice
+    font_choice=$(dialog_menu "${font_title}" "${font_items[@]}") \
+        || return "${TUI_BACK}"
+
+    # "default" is a menu tag, not a font name — the empty value is what tells
+    # system_set_console_font() to leave /etc/rc.conf alone.
+    [[ "${font_choice}" == "default" ]] && font_choice=""
+
+    CONSOLE_FONT="${font_choice}"
+    export CONSOLE_FONT
+
+    einfo "Timezone: ${TIMEZONE}, Locale: ${LOCALE}, Keymap: ${KEYMAP}, Console font: ${CONSOLE_FONT:-default}"
     return "${TUI_NEXT}"
 }

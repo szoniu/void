@@ -600,7 +600,7 @@ bash tests/test_system.sh        # Service enablement, sudo drop-in, chroot left
 bash tests/shellcheck.sh         # Static analysis / lint (needs shellcheck)
 ```
 
-All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 17 functional files (587 assertions) + `shellcheck.sh` (lints all 65 `.sh` files; needs `shellcheck` installed).
+All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 17 functional files (604 assertions) + `shellcheck.sh` (lints all 65 `.sh` files; needs `shellcheck` installed).
 
 ## Known patterns and pitfalls
 
@@ -613,6 +613,16 @@ All tests are standalone — they do not require root or hardware. They use `DRY
   then `ro`, looks for `/var/db/xbps` or `ID=void`); the `disks` phase in
   `tui/progress.sh` refuses `disk_execute_plan` when it says yes in resume mode
   and mounts instead. In Gentoo this nearly wiped a built system twice.
+- **The rescue console needs a readable font.** `CONSOLE_FONT` (empty = unchanged) writes
+  `FONT=` into `/etc/rc.conf` next to `KEYMAP`, installing `terminus-font` on demand.
+  The stock VGA face is unreadable on a 4K/Retina panel — which is exactly the screen
+  you land on when the graphical session will not start. `suggest_console_font()`
+  (`lib/hardware.sh`) scales the proposal off the internal panel's preferred mode and
+  falls back to a guess on `APPLE_DETECTED`; below 1920px it suggests nothing rather
+  than pull in a package for no gain. The TUI list is hard-coded on purpose (the live
+  medium cannot enumerate the TARGET's `/usr/share/kbd/consolefonts`), so the name is
+  validated in the chroot and skipped with a warning if absent — a `FONT=` pointing at
+  a missing face leaves the console broken, i.e. the failure this exists to prevent.
 - **runit has no `fstrim.timer`, so nothing trimmed SSDs at all.** `setup_periodic_trim()`
   (`lib/system.sh`) writes `/etc/cron.weekly/fstrim` (`fstrim -av`, mode 0755) when the
   target disk is non-rotational. Chosen over `discard=async` in the mount options: one
