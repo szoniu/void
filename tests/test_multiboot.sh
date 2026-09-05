@@ -387,6 +387,27 @@ summary_out=$( set +u; get_hardware_summary 2>/dev/null || true )
 assert_true "no warning when nothing is encrypted" \
     test -z "$(grep -o 'BitLocker' <<< "${summary_out}" || true)"
 
+# Case 10: the data-loss path. A BitLocker volume that lsblk reports as plain
+# `ntfs` — the very case the signature check exists for — must never reach a
+# resizer. Nothing in the shrink path looks at fstype alone any more.
+SHRINK_PARTITION=/dev/nvme0n1p3
+SHRINK_PARTITION_FSTYPE=ntfs
+SHRINK_NEW_SIZE_MIB=100000
+TARGET_DISK=/dev/nvme0n1
+BITLOCKER_PARTITIONS="/dev/nvme0n1p3"
+DISK_ACTIONS=()
+rc=0
+disk_plan_shrink >/dev/null 2>&1 || rc=$?
+assert_eq "disk_plan_shrink refuses an encrypted volume reported as ntfs" "1" "${rc}"
+assert_eq "...and plans nothing" "0" "${#DISK_ACTIONS[@]}"
+
+# The same partition without BitLocker must still be plannable — the gate has to
+# be about encryption, not about ntfs.
+BITLOCKER_PARTITIONS=""
+DISK_ACTIONS=()
+disk_plan_shrink >/dev/null 2>&1 || true
+assert_true "plain ntfs is still shrinkable" test "${#DISK_ACTIONS[@]}" -gt 0
+
 # Case 5: wiring. Detection is worthless if the scan does not call it, and the
 # probe loop must skip those partitions — an encrypted volume cannot be mounted,
 # so probing it only produces noise.

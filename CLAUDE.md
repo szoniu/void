@@ -599,7 +599,7 @@ bash tests/test_peripherals.sh   # Peripheral opt-ins, resume recovery, Flatpak 
 bash tests/shellcheck.sh         # Static analysis / lint (needs shellcheck)
 ```
 
-All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 16 functional files (530 assertions) + `shellcheck.sh` (lints all 64 `.sh` files; needs `shellcheck` installed).
+All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 16 functional files (533 assertions) + `shellcheck.sh` (lints all 64 `.sh` files; needs `shellcheck` installed).
 
 ## Known patterns and pitfalls
 
@@ -630,6 +630,12 @@ All tests are standalone — they do not require root or hardware. They use `DRY
   The signature read is restricted to `TYPE=part` and wrapped in a timeout, because
   a raw LBA0 read from an optical drive with a damaged disc stalls hardware detection
   for tens of seconds with nothing on screen.
+  Both shrink gates consult BITLOCKER_PARTITIONS, not the fstype string: an
+  encrypted volume can report itself as plain `ntfs`, and that is precisely the
+  case the signature check exists for — so a gate keyed on fstype would hand
+  ciphertext to ntfsresize. The second gate sits in disk_plan_shrink because that
+  path is reachable from a hand-edited preset or an inferred --resume config,
+  with the wizard never running.
   Same class of bug as macOS being invisible before APFS detection landed.
 - **`users` runs BEFORE `kernel`/`desktop`.** Those are the longest, most
   failure-prone phases; with `users` last, a desktop failure left root with the

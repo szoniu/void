@@ -64,6 +64,18 @@ Make sure you have a full backup before continuing." || true
         [[ "${pdev}" == "${disk}" ]] && continue
         [[ "${pdev}" == "${esp_partition}" ]] && continue
         [[ -z "${pfstype}" ]] && continue
+
+        # A BitLocker volume can report itself as plain `ntfs` — that is exactly
+        # why detect_bitlocker() checks the volume signature and not just the
+        # fstype string. Without this the partition passes disk_can_shrink_fstype,
+        # lands on the shrink list and ntfsresize gets pointed at ciphertext.
+        # The fstype does not know; detect_bitlocker() already worked it out.
+        local _blp _skip_bl=0
+        for _blp in ${BITLOCKER_PARTITIONS:-}; do
+            [[ "${pdev}" == "${_blp}" ]] && _skip_bl=1 && break
+        done
+        [[ ${_skip_bl} -eq 1 ]] && continue
+
         disk_can_shrink_fstype "${pfstype}" || continue
 
         # Check resize tools available (skip if missing)
