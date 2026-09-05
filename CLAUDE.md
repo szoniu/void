@@ -596,10 +596,11 @@ bash tests/test_wayland.sh       # Wayland-only: package swaps, greetd, verifica
 bash tests/test_snapper.sh       # Snapshots + GRUB redirect stub (Secure Boot)
 bash tests/test_hybrid_gpu.sh    # GPU classification, hybrid setups, NVIDIA generations
 bash tests/test_peripherals.sh   # Peripheral opt-ins, resume recovery, Flatpak wiring
+bash tests/test_system.sh        # Service enablement, sudo drop-in, chroot leftovers
 bash tests/shellcheck.sh         # Static analysis / lint (needs shellcheck)
 ```
 
-All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 16 functional files (506 assertions) + `shellcheck.sh` (lints all 64 `.sh` files; needs `shellcheck` installed).
+All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 17 functional files (516 assertions) + `shellcheck.sh` (lints all 65 `.sh` files; needs `shellcheck` installed).
 
 ## Known patterns and pitfalls
 

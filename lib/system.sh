@@ -254,15 +254,54 @@ system_create_users() {
     fi
 }
 
+# Services whose absence leaves the installed system unusable rather than merely
+# degraded: no device nodes (udevd), no text console to log in on (agetty-tty1),
+# no session bus or seat management (dbus/elogind), no graphical login (the DMs).
+# For these a failed `ln` aborts the install — the alternative is that the user
+# finds out after the reboot, on a machine they cannot log into.
+_CRITICAL_SERVICES="udevd dbus elogind agetty-tty1 sddm gdm greetd"
+
 # _enable_service — Enable a runit service
+#
+# Verifies that the symlink actually appeared. It used to just `ln … || true` and
+# log "Enabled" unconditionally, so a failure was indistinguishable from success:
+# the install log claimed every service was on while the system came up without a
+# display manager. SERVICE_ROOT exists to make that path testable off a live
+# machine; it is empty in production, so the paths stay absolute as before.
 _enable_service() {
     local service="$1"
-    if [[ -d "/etc/sv/${service}" ]]; then
-        ln -sf "/etc/sv/${service}" "/var/service/${service}" 2>/dev/null || true
-        einfo "Enabled runit service: ${service}"
-    else
+    local root="${SERVICE_ROOT:-}"
+
+    if [[ ! -d "${root}/etc/sv/${service}" ]]; then
         ewarn "Service not found: ${service}"
+        return 1
     fi
+
+    # /var/service is only a pointer: symlink → /etc/runit/runsvdir/current →
+    # default. Both links are created by the runit-void INSTALL script at
+    # post-install time — the void-packages template deletes them at build time
+    # on purpose ("Enable services at post-install time instead"). So inside a
+    # chroot where xbps-reconfigure has not run yet, /var/service is a DANGLING
+    # symlink and `ln` into it fails. Fall back to the physical directory, which
+    # is what the official Void installer links into anyway.
+    local svcdir="${root}/var/service"
+    if [[ ! -d "${svcdir}/" ]]; then
+        svcdir="${root}/etc/runit/runsvdir/default"
+        mkdir -p "${svcdir}" 2>/dev/null || true
+    fi
+
+    ln -sf "/etc/sv/${service}" "${svcdir}/${service}" 2>/dev/null || true
+
+    if [[ -L "${svcdir}/${service}" ]]; then
+        einfo "Enabled runit service: ${service} (${svcdir#"${root}"})"
+        return 0
+    fi
+
+    if [[ " ${_CRITICAL_SERVICES} " == *" ${service} "* ]]; then
+        die "Failed to enable critical service: ${service} — ${svcdir#"${root}"} is not writable. The installed system would come up without it."
+    fi
+    ewarn "Failed to enable runit service: ${service} (could not create ${svcdir#"${root}"}/${service})"
+    return 1
 }
 
 # install_power_management — Laptop power management (battery-gated).
