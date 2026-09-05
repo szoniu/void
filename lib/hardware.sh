@@ -540,6 +540,69 @@ detect_esp() {
 
 # --- Installed OS Detection ---
 
+# BitLocker volume signature: the OEM ID field at offset 3 holds "-FVE-FS-",
+# in exactly the place where NTFS keeps "NTFS    ". Needed as a fallback because
+# libblkid only reports TYPE="BitLocker" from util-linux 2.30 onwards — on an
+# older live medium an encrypted partition carrying the entire Windows install
+# simply has no FSTYPE, so it looks like unused space to everything below.
+readonly _BITLOCKER_SIGNATURE="-FVE-FS-"
+
+# _partition_has_bitlocker_signature — read the volume header directly
+# Works on a regular file too, which is what makes it testable without hardware.
+_partition_has_bitlocker_signature() {
+    local part="$1"
+    [[ -r "${part}" ]] || return 1
+    local sig
+    sig=$(dd if="${part}" bs=1 skip=3 count=8 2>/dev/null | tr -d '\0') || return 1
+    [[ "${sig}" == "${_BITLOCKER_SIGNATURE}" ]]
+}
+
+# detect_bitlocker — Flag BitLocker-encrypted partitions
+#
+# Windows 11 24H2 turns BitLocker on by default on consumer devices, so this is
+# now the common case, not an edge one. An encrypted partition cannot be mounted
+# and has no readable /Windows/System32, so _detect_ntfs_on_partition() never
+# marks it — meaning a disk with a whole Windows install on it would show up as
+# empty, raise no warning and NOT require typing ERASE. Same class of bug as
+# macOS being invisible before APFS detection landed.
+#
+# Called from detect_installed_oses(), which has already declared DETECTED_OSES.
+detect_bitlocker() {
+    BITLOCKER_DETECTED="${BITLOCKER_DETECTED:-0}"
+    BITLOCKER_PARTITIONS="${BITLOCKER_PARTITIONS:-}"
+
+    local part fstype is_bl
+    while IFS=' ' read -r part fstype; do
+        [[ -z "${part}" ]] && continue
+        is_bl=0
+        case "${fstype,,}" in
+            bitlocker) is_bl=1 ;;
+            # No FSTYPE at all is the interesting case (old libblkid); ntfs is
+            # checked too because BitLocker To Go keeps an NTFS-looking header.
+            ""|ntfs) _partition_has_bitlocker_signature "${part}" && is_bl=1 ;;
+        esac
+        [[ "${is_bl}" == "1" ]] || continue
+
+        BITLOCKER_DETECTED=1
+        BITLOCKER_PARTITIONS+="${BITLOCKER_PARTITIONS:+ }${part}"
+        DETECTED_OSES["${part}"]="Windows (BitLocker encrypted)"
+        WINDOWS_DETECTED=1
+        ewarn "BitLocker-encrypted partition: ${part} — Windows lives there even though nothing can read it"
+    done < <(lsblk -lno PATH,FSTYPE 2>/dev/null || true)
+
+    export BITLOCKER_DETECTED BITLOCKER_PARTITIONS WINDOWS_DETECTED
+}
+
+# bitlocker_fstype_is_encrypted — True for a filesystem type no Linux resizer
+# can touch. Mirrors apple_fstype_is_macos(): the shrink wizard uses it to
+# explain what to do instead of printing "unsupported filesystem".
+bitlocker_fstype_is_encrypted() {
+    case "${1,,}" in
+        bitlocker) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # detect_installed_oses — Scan partitions for installed operating systems
 # Populates DETECTED_OSES associative array: partition -> OS name
 detect_installed_oses() {
@@ -547,6 +610,10 @@ detect_installed_oses() {
     LINUX_DETECTED=0
 
     einfo "Scanning for installed operating systems..."
+
+    # First: BitLocker. Encrypted partitions cannot be probed, so they have to be
+    # flagged before the loop below decides there is nothing on them.
+    detect_bitlocker
 
     local part fstype
     while IFS=' ' read -r part fstype; do
@@ -557,6 +624,14 @@ detect_installed_oses() {
         for esp in "${ESP_PARTITIONS[@]}"; do
             [[ "${part}" == "${esp}" ]] && continue 2
         done
+
+        # Skip BitLocker — already flagged above and impossible to mount
+        if [[ -n "${BITLOCKER_PARTITIONS:-}" ]]; then
+            local blp
+            for blp in ${BITLOCKER_PARTITIONS}; do
+                [[ "${part}" == "${blp}" ]] && continue 2
+            done
+        fi
 
         case "${fstype}" in
             ext4|xfs)
@@ -692,6 +767,8 @@ deserialize_detected_oses() {
     WINDOWS_DETECTED="${WINDOWS_DETECTED:-0}"
     LINUX_DETECTED="${LINUX_DETECTED:-0}"
     MACOS_DETECTED="${MACOS_DETECTED:-0}"
+    BITLOCKER_DETECTED="${BITLOCKER_DETECTED:-0}"
+    BITLOCKER_PARTITIONS=""
 
     local serialized="${DETECTED_OSES_SERIALIZED:-}"
     [[ -z "${serialized}" ]] && return 0
@@ -707,6 +784,12 @@ deserialize_detected_oses() {
         # Restore flags
         if [[ "${name}" == *"Windows"* ]]; then
             WINDOWS_DETECTED=1
+            # A resumed install must not silently lose the fact that the Windows
+            # it is sitting next to is encrypted — that is what gates the shrink.
+            if [[ "${name}" == *"BitLocker"* ]]; then
+                BITLOCKER_DETECTED=1
+                BITLOCKER_PARTITIONS+="${BITLOCKER_PARTITIONS:+ }${part}"
+            fi
         elif [[ "${name}" == *"macOS"* ]]; then
             # Recovery alone does not mean a usable macOS install
             [[ "${name}" != "macOS Recovery" ]] && MACOS_DETECTED=1
@@ -716,6 +799,7 @@ deserialize_detected_oses() {
     done
 
     export DETECTED_OSES WINDOWS_DETECTED LINUX_DETECTED MACOS_DETECTED
+    export BITLOCKER_DETECTED BITLOCKER_PARTITIONS
 }
 
 # --- Full Detection ---
@@ -768,6 +852,7 @@ get_hardware_summary() {
         fi
         [[ "${APPLE_SPI_INPUT:-0}" == "1" ]] && summary+="    Keyboard/touchpad: SPI (applespi)\n"
         [[ "${MACOS_DETECTED:-0}" == "1" ]] && summary+="    macOS install: present on disk\n"
+        [[ "${BITLOCKER_DETECTED:-0}" == "1" ]] && summary+="    BitLocker: ENCRYPTED Windows partition(s) — cannot be shrunk from Linux\n"
     fi
     if [[ "${UMPC_DETECTED:-0}" == "1" ]]; then
         summary+="  UMPC: ${UMPC_VENDOR} ${UMPC_MODEL}\n"

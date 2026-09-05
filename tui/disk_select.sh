@@ -92,6 +92,7 @@ Make sure you have a full backup before continuing." || true
         # APFS container, so "unsupported filesystem" would send the user
         # looking for a package that does not exist.
         local has_macos_fs=0
+        local has_bitlocker_fs=0
         local mline mfstype
         while IFS= read -r mline; do
             mfstype=$(awk '{print $3}' <<< "${mline}")
@@ -100,7 +101,33 @@ Make sure you have a full backup before continuing." || true
                 has_macos_fs=1
                 break
             fi
+            if declare -F bitlocker_fstype_is_encrypted >/dev/null && \
+               [[ -n "${mfstype}" ]] && bitlocker_fstype_is_encrypted "${mfstype}"; then
+                has_bitlocker_fs=1
+            fi
         done < <(lsblk -lno NAME,SIZE,FSTYPE "${disk}" 2>/dev/null | tail -n +2)
+
+        # BitLocker gets its own message for the same reason APFS does: the
+        # generic "unsupported filesystem" sends the user hunting for a tool that
+        # does not exist. ntfsresize cannot touch an encrypted volume — the fix
+        # is on the Windows side, and it is a suspend/decrypt, not a package.
+        if [[ ${has_macos_fs} -eq 0 && ${has_bitlocker_fs} -eq 1 ]]; then
+            dialog_msgbox "Cannot Shrink a BitLocker Partition" \
+                "${disk} holds a BitLocker-ENCRYPTED Windows partition and\n\
+there is not enough free space for Void.\n\n\
+No Linux tool can resize an encrypted volume — ntfsresize\n\
+sees ciphertext, not a filesystem.\n\n\
+Do this instead, in Windows:\n\
+  1. Boot Windows\n\
+  2. Disk Management -> shrink the volume there\n\
+     (BitLocker stays on; Windows resizes it itself)\n\
+  3. Leave at least 30 GiB of FREE space (do not create\n\
+     a partition there — the installer will)\n\n\
+Suspending or decrypting BitLocker also works, but shrinking\n\
+from Windows is enough and keeps the disk encrypted.\n\n\
+IMPORTANT: back up your recovery key before repartitioning."
+            return "${TUI_BACK}"
+        fi
 
         if [[ ${has_macos_fs} -eq 1 ]]; then
             dialog_msgbox "Cannot Shrink macOS Partition" \

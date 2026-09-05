@@ -599,7 +599,7 @@ bash tests/test_peripherals.sh   # Peripheral opt-ins, resume recovery, Flatpak 
 bash tests/shellcheck.sh         # Static analysis / lint (needs shellcheck)
 ```
 
-All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 16 functional files (506 assertions) + `shellcheck.sh` (lints all 64 `.sh` files; needs `shellcheck` installed).
+All tests are standalone — they do not require root or hardware. They use `DRY_RUN=1` and `NON_INTERACTIVE=1`. The full suite is 16 functional files (522 assertions) + `shellcheck.sh` (lints all 64 `.sh` files; needs `shellcheck` installed).
 
 ## Known patterns and pitfalls
 
@@ -612,6 +612,19 @@ All tests are standalone — they do not require root or hardware. They use `DRY
   then `ro`, looks for `/var/db/xbps` or `ID=void`); the `disks` phase in
   `tui/progress.sh` refuses `disk_execute_plan` when it says yes in resume mode
   and mounts instead. In Gentoo this nearly wiped a built system twice.
+- **A BitLocker partition is an INVISIBLE Windows install.** Windows 11 24H2
+  encrypts by default on consumer machines, and an encrypted volume cannot be
+  mounted and has no readable `/Windows/System32` — so `_detect_ntfs_on_partition()`
+  never flagged it and a disk holding an entire Windows install showed up as empty:
+  no warning, no `ERASE` prompt. `detect_bitlocker()` (`lib/hardware.sh`) runs
+  BEFORE the probe loop and marks those partitions, which also skips them (they
+  cannot be probed). Two detection paths on purpose: `blkid`/`lsblk` `FSTYPE=BitLocker`,
+  and — when libblkid is older than util-linux 2.30 and reports NO fstype at all —
+  the `-FVE-FS-` volume signature at offset 3, read straight from the header. The
+  flag is serialized, so a resumed install does not forget the disk is encrypted,
+  and the shrink wizard says what to do in Windows instead of "unsupported
+  filesystem" (`bitlocker_fstype_is_encrypted()`, mirroring `apple_fstype_is_macos()`).
+  Same class of bug as macOS being invisible before APFS detection landed.
 - **`users` runs BEFORE `kernel`/`desktop`.** Those are the longest, most
   failure-prone phases; with `users` last, a desktop failure left root with the
   ROOTFS's locked `*` password and no user account — nothing could log in. An
