@@ -406,7 +406,21 @@ disk_plan_shrink() {
         return 1
     fi
 
-    # Hard safety gate, independent of the TUI shrink wizard: never shrink a
+    # Hard safety gate #1: never resize an encrypted volume. BitLocker can look
+    # like plain ntfs to lsblk, so the fstype check below would let it through and
+    # ntfsresize would operate on ciphertext. Same reasoning as the used-space
+    # gate under it: this path is reachable from a hand-edited preset or an
+    # inferred --resume config, without the wizard ever running.
+    local _blp
+    for _blp in ${BITLOCKER_PARTITIONS:-}; do
+        if [[ "${part}" == "${_blp}" ]]; then
+            eerror "Refusing to shrink ${part}: BitLocker-encrypted volume"
+            eerror "No Linux tool can resize it — shrink it from Windows instead"
+            return 1
+        fi
+    done
+
+    # Hard safety gate #2, independent of the TUI shrink wizard: never shrink a
     # partition below the space it is actually using (+1 GiB margin). The
     # wizard normally enforces this, but disk_plan_shrink can also be reached
     # from a hand-edited preset or an inferred --resume config where the value
@@ -738,7 +752,13 @@ disk_execute_plan() {
             WINDOWS_DETECTED=0
             LINUX_DETECTED=0
             DETECTED_OSES_SERIALIZED=""
+            # BitLocker state describes partitions that no longer exist after the
+            # wipe; leaving it set would keep the encrypted-Windows warning in the
+            # summary and in the saved config for a disk that is now empty.
+            BITLOCKER_DETECTED=0
+            BITLOCKER_PARTITIONS=""
             export WINDOWS_DETECTED LINUX_DETECTED DETECTED_OSES_SERIALIZED
+            export BITLOCKER_DETECTED BITLOCKER_PARTITIONS
         fi
     fi
 

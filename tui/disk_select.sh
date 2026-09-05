@@ -64,6 +64,18 @@ Make sure you have a full backup before continuing." || true
         [[ "${pdev}" == "${disk}" ]] && continue
         [[ "${pdev}" == "${esp_partition}" ]] && continue
         [[ -z "${pfstype}" ]] && continue
+
+        # A BitLocker volume can report itself as plain `ntfs` — that is exactly
+        # why detect_bitlocker() checks the volume signature and not just the
+        # fstype string. Without this the partition passes disk_can_shrink_fstype,
+        # lands on the shrink list and ntfsresize gets pointed at ciphertext.
+        # The fstype does not know; detect_bitlocker() already worked it out.
+        local _blp _skip_bl=0
+        for _blp in ${BITLOCKER_PARTITIONS:-}; do
+            [[ "${pdev}" == "${_blp}" ]] && _skip_bl=1 && break
+        done
+        [[ ${_skip_bl} -eq 1 ]] && continue
+
         disk_can_shrink_fstype "${pfstype}" || continue
 
         # Check resize tools available (skip if missing)
@@ -92,6 +104,7 @@ Make sure you have a full backup before continuing." || true
         # APFS container, so "unsupported filesystem" would send the user
         # looking for a package that does not exist.
         local has_macos_fs=0
+        local has_bitlocker_fs=0
         local mline mfstype
         while IFS= read -r mline; do
             mfstype=$(awk '{print $3}' <<< "${mline}")
@@ -100,7 +113,44 @@ Make sure you have a full backup before continuing." || true
                 has_macos_fs=1
                 break
             fi
+            if declare -F bitlocker_fstype_is_encrypted >/dev/null && \
+               [[ -n "${mfstype}" ]] && bitlocker_fstype_is_encrypted "${mfstype}"; then
+                has_bitlocker_fs=1
+            fi
         done < <(lsblk -lno NAME,SIZE,FSTYPE "${disk}" 2>/dev/null | tail -n +2)
+
+        # FSTYPE alone misses the case the signature fallback exists for: with an
+        # old libblkid the encrypted partition reports NO fstype, so the loop
+        # above cannot see it and the user would get the generic "unsupported
+        # filesystem" — in exactly the scenario the extra detection path was
+        # written to cover. detect_bitlocker() already worked this out, so use
+        # its result and treat fstype as the secondary signal.
+        local blp
+        for blp in ${BITLOCKER_PARTITIONS:-}; do
+            [[ "${blp}" == "${disk}"* ]] && has_bitlocker_fs=1 && break
+        done
+
+        # BitLocker gets its own message for the same reason APFS does: the
+        # generic "unsupported filesystem" sends the user hunting for a tool that
+        # does not exist. ntfsresize cannot touch an encrypted volume — the fix
+        # is on the Windows side, and it is a suspend/decrypt, not a package.
+        if [[ ${has_macos_fs} -eq 0 && ${has_bitlocker_fs} -eq 1 ]]; then
+            dialog_msgbox "Cannot Shrink a BitLocker Partition" \
+                "${disk} holds a BitLocker-ENCRYPTED Windows partition and\n\
+there is not enough free space for Void.\n\n\
+No Linux tool can resize an encrypted volume — ntfsresize\n\
+sees ciphertext, not a filesystem.\n\n\
+Do this instead, in Windows:\n\
+  1. Boot Windows\n\
+  2. Disk Management -> shrink the volume there\n\
+     (BitLocker stays on; Windows resizes it itself)\n\
+  3. Leave at least 30 GiB of FREE space (do not create\n\
+     a partition there — the installer will)\n\n\
+Suspending or decrypting BitLocker also works, but shrinking\n\
+from Windows is enough and keeps the disk encrypted.\n\n\
+IMPORTANT: back up your recovery key before repartitioning."
+            return "${TUI_BACK}"
+        fi
 
         if [[ ${has_macos_fs} -eq 1 ]]; then
             dialog_msgbox "Cannot Shrink macOS Partition" \
