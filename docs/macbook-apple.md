@@ -147,6 +147,41 @@ Po instalacji sprawdzisz to jednym poleceniem:
 `dmsetup table cryptroot | grep allow_discards`. Gdyby czegoś brakowało,
 instalator zostawia gotowy przepis w `/root/POST-INSTALL-LUKS-TRIM.txt`.
 
+## Cały dysk pod Void (bez macOS)
+
+Wariant prostszy od dual-boota i na starszym Maku często sensowniejszy: macOS na
+takim sprzęcie z każdą wersją chodzi wolniej, a zwolnione miejsce i tak zjadał.
+
+**W macOS nie robisz NIC** poza kopią danych — żadnego `resizeContainer`, żadnych
+snapshotów. Cała sekcja „Robienie miejsca w macOS" niżej dotyczy wyłącznie
+dual-boota.
+
+W kreatorze: schemat **auto**. Instalator rozpoznaje kontener APFS po GPT GUID,
+więc pokaże „macOS (APFS container)" na liście systemów do skasowania i **każe
+wpisać `ERASE`** — pomyłką tego nie zrobisz.
+
+Co powstaje: świeży GPT, **ESP 512 MiB** (`ESP_SIZE_MIB` w `lib/constants.sh`)
+i root na całą resztę. 200-megabajtowy ESP Apple znika razem z macOS — bez straty,
+512 MiB to wygodniejszy zapas na kolejne kernele i initramfsy.
+
+Boot działa, mimo że ESP jest nowy: na sprzęcie Apple `grub-install --removable`
+jest ścieżką **podstawową** (`lib/bootloader.sh`), czyli GRUB ląduje
+w `\EFI\BOOT\BOOTX64.EFI` — tej, którą firmware Apple próbuje zawsze,
+niezależnie od gubionych wpisów NVRAM.
+
+**Czego nie odzyskasz:** aktualizacje firmware'u (EFI) Apple dostarcza wyłącznie
+przez macOS. Bez macOS na dysku zostajesz z wersją, którą maszyna ma teraz. Dla
+modeli z 2017 to temat zamknięty — Apple ich już nie aktualizuje — ale warto
+wiedzieć, że to decyzja w jedną stronę.
+
+**Powrót jest możliwy bez lokalnej partycji Recovery:** Internet Recovery siedzi
+w firmwarze, **Cmd+Opt+R** przy starcie pobiera instalator macOS z sieci. MacBook
+12" ma tylko Wi-Fi, ale Recovery ma własny stos sieciowy, więc to wystarcza.
+
+Przy całym dysku warto rozważyć **btrfs + snapper** (ekran 6 → ekran szyfrowania →
+pytanie o snapshoty): na rolling release cofnięcie złej aktualizacji z menu GRUB
+jest tańsze niż reinstalacja, a miejsce bez dual-boota jest.
+
 ## Kolejność przy dual-boocie z macOS
 
 1. macOS: Time Machine.
