@@ -133,14 +133,32 @@ config_diff() {
 
 # validate_config — Check configuration consistency before installation
 # Prints error messages to stdout. Returns 0 if valid, 1 if errors found.
+#
+# $1 — validation mode:
+#   full   (default) every field the wizard collects must be present. Used by
+#          the summary screen and by --install, where the config file is
+#          expected to be complete.
+#   resume the "must be non-empty" block shrinks to what a remaining phase
+#          cannot run without. A --resume that inferred its config from the
+#          installed system has no way to recover USERNAME or the password
+#          hashes (they are not stored anywhere readable), and the accounts
+#          already exist on disk — demanding them would turn every inferred
+#          resume into a full wizard run, i.e. break the recovery path this
+#          gate is supposed to protect. Every other check still applies:
+#          enums, formats, block devices and cross-field consistency are what
+#          actually stand between a hand-edited value and a destructive phase.
 validate_config() {
+    local mode="${1:-full}"
     local -a errors=()
 
     # --- Required variables (must be non-empty) ---
     local -a required=(
         TARGET_DISK FILESYSTEM HOSTNAME TIMEZONE LOCALE
-        KERNEL_TYPE GPU_VENDOR USERNAME ROOT_PASSWORD_HASH USER_PASSWORD_HASH
+        KERNEL_TYPE GPU_VENDOR
     )
+    if [[ "${mode}" != "resume" ]]; then
+        required+=(USERNAME ROOT_PASSWORD_HASH USER_PASSWORD_HASH)
+    fi
     local var
     for var in "${required[@]}"; do
         if [[ -z "${!var:-}" ]]; then
@@ -306,4 +324,61 @@ validate_config() {
     fi
 
     return 0
+}
+
+# validate_config_gate — Pre-flight validation for entry points that skip the
+# summary screen.
+#
+# validate_config() used to have exactly ONE production caller (tui/summary.sh),
+# so `--install` (config file straight to screen_progress) and the inferred
+# `--resume` path ran with NO gate at all: a hand-edited preset or a value
+# recovered from a half-installed system went to the destructive phases with its
+# enums, block devices and cross-field consistency unchecked (Forgejo #27).
+#
+# Called from screen_progress() before anything touches the disk. On the wizard
+# path this repeats the summary screen's check, which is free and keeps the gate
+# in one place rather than three.
+#
+# Failure handling differs by context on purpose:
+#   - non-interactive: die, because there is nobody to fix the config and the
+#     next step formats a disk.
+#   - interactive: show the errors and offer the wizard, which is the friendlier
+#     answer on --resume after a crash — the alternative is telling someone
+#     mid-recovery to go hand-edit a file.
+validate_config_gate() {
+    local mode="full"
+    [[ "${MODE:-}" == "resume" ]] && mode="resume"
+
+    local errors
+    errors=$(validate_config "${mode}") && return 0
+
+    eerror "Configuration validation failed:"
+    local line
+    while IFS= read -r line; do
+        [[ -n "${line}" ]] && eerror "  ${line}"
+    done <<< "${errors}"
+
+    if [[ "${NON_INTERACTIVE:-0}" == "1" ]] || ! declare -F dialog_yesno >/dev/null; then
+        die "Refusing to start the installation with an invalid configuration"
+    fi
+
+    dialog_msgbox "Configuration Errors" \
+        "The configuration cannot be installed as it stands:\n\n${errors}"
+
+    if ! declare -F run_configuration_wizard >/dev/null; then
+        die "Refusing to start the installation with an invalid configuration"
+    fi
+
+    if ! dialog_yesno "Fix Configuration" \
+        "Open the configuration wizard to correct this?\n\nChoosing 'No' aborts the installation."; then
+        die "Aborted — configuration was not corrected"
+    fi
+
+    run_configuration_wizard
+
+    # The wizard's own summary screen validates in "full" mode, but it can be
+    # left by other routes; re-check rather than trust that it was reached.
+    errors=$(validate_config "${mode}") && return 0
+
+    die "Configuration is still invalid after the wizard:"$'\n'"${errors}"
 }

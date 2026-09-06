@@ -63,7 +63,9 @@ clear_config() {
     unset TARGET_DISK PARTITION_SCHEME FILESYSTEM SWAP_TYPE \
           HOSTNAME TIMEZONE LOCALE KEYMAP KERNEL_TYPE GPU_VENDOR DESKTOP_TYPE USERNAME \
           ROOT_PASSWORD_HASH USER_PASSWORD_HASH ESP_PARTITION ROOT_PARTITION \
-          ESP_REUSE SWAP_SIZE_MIB HYBRID_GPU MIRROR_URL 2>/dev/null || true
+          ESP_REUSE SWAP_SIZE_MIB HYBRID_GPU MIRROR_URL \
+          ENABLE_SNAPPER LUKS_ENABLED LUKS_ALLOW_DISCARDS WAYLAND_ONLY \
+          CONSOLE_FONT SHRINK_PARTITION 2>/dev/null || true
 }
 
 # ============================
@@ -305,6 +307,108 @@ export TARGET_DISK="/dev/nonexistent"
 rc=0
 output=$(validate_config) || rc=$?
 assert_eq "DRY_RUN=1 skips block device check" "0" "${rc}"
+
+echo ""
+echo "=== Forgejo #27: the gate on entry points that skip the summary ==="
+
+# validate_config gained a mode argument. "resume" drops ONLY the account
+# fields, which an inferred config cannot recover; everything else still bites.
+clear_config
+set_valid_config
+export USERNAME="" ROOT_PASSWORD_HASH="" USER_PASSWORD_HASH=""
+
+rc=0
+output=$(validate_config) || rc=$?
+assert_eq "full mode still demands the account fields" "1" "${rc}"
+assert_contains "…and names USERNAME" "USERNAME is required" "${output}"
+
+rc=0
+output=$(validate_config resume) || rc=$?
+assert_eq "resume mode accepts an inferred config without accounts" "0" "${rc}"
+
+# The dangerous half must survive the relaxation, or the mode would be a hole
+# rather than a concession: these are the values that steer a destructive phase.
+export FILESYSTEM="reiserfs"
+rc=0
+output=$(validate_config resume) || rc=$?
+assert_eq "resume mode still rejects a bad filesystem" "1" "${rc}"
+assert_contains "…naming the enum" "FILESYSTEM='reiserfs'" "${output}"
+
+clear_config
+set_valid_config
+export USERNAME="" ROOT_PASSWORD_HASH="" USER_PASSWORD_HASH=""
+export LUKS_ENABLED="no" LUKS_ALLOW_DISCARDS="yes"
+rc=0
+output=$(validate_config resume) || rc=$?
+assert_eq "resume mode still rejects a stale TRIM opt-in" "1" "${rc}"
+
+clear_config
+set_valid_config
+export ENABLE_SNAPPER="yes" FILESYSTEM="ext4"
+export USERNAME="" ROOT_PASSWORD_HASH="" USER_PASSWORD_HASH=""
+rc=0
+output=$(validate_config resume) || rc=$?
+assert_eq "resume mode still rejects snapper without btrfs" "1" "${rc}"
+
+echo ""
+echo "=== …and the gate runs BEFORE anything touches the disk ==="
+
+# Assert on the EFFECT, not on the presence of a call in the source: stub the
+# first two disk-touching steps of screen_progress so they leave a trace, then
+# check the trace. A mutation that drops validate_config_gate from progress.sh
+# turns the first assertion red.
+TRACE="${TMPDIR:-/tmp}/void-test-validate-trace.$$"
+
+_run_progress_with_stubs() {
+    # Subshell: validate_config_gate dies via exit, and the positive case bails
+    # out with a distinctive code once it is past the gate.
+    (
+        source "${SCRIPT_DIR}/tui/progress.sh"
+
+        mount_filesystems()        { echo "mount" >> "${TRACE}"; return 0; }
+        luks_open_for_resume()     { echo "luks" >> "${TRACE}"; return 0; }
+        _resume_target_has_system(){ return 1; }
+        mountpoint()               { return 1; }
+        checkpoint_reached()       { return 1; }
+        _detect_and_handle_resume(){ echo "phases" >> "${TRACE}"; exit 99; }
+
+        screen_progress
+    ) >/dev/null 2>&1
+}
+
+clear_config
+set_valid_config
+export NON_INTERACTIVE=1 MODE="install" FILESYSTEM="reiserfs"
+: > "${TRACE}"
+rc=0
+_run_progress_with_stubs || rc=$?
+assert_eq "an invalid --install config aborts screen_progress" "1" "${rc}"
+assert_eq "…having touched nothing on the disk" "" "$(cat "${TRACE}")"
+
+# Control: the same harness must reach the disk steps when the config is sane,
+# otherwise the assertion above would pass for the wrong reason.
+clear_config
+set_valid_config
+export NON_INTERACTIVE=1 MODE="install"
+: > "${TRACE}"
+rc=0
+_run_progress_with_stubs || rc=$?
+assert_eq "a valid config gets past the gate" "99" "${rc}"
+assert_contains "…and reaches the phase runner" "phases" "$(cat "${TRACE}")"
+
+# The inferred --resume path is the one that would break if the gate demanded
+# account fields: same empty accounts, and it must still get through.
+clear_config
+set_valid_config
+export NON_INTERACTIVE=1 MODE="resume"
+export USERNAME="" ROOT_PASSWORD_HASH="" USER_PASSWORD_HASH=""
+: > "${TRACE}"
+rc=0
+_run_progress_with_stubs || rc=$?
+assert_eq "an inferred --resume config is not blocked by missing accounts" "99" "${rc}"
+
+rm -f "${TRACE}"
+unset NON_INTERACTIVE MODE
 
 # Cleanup
 rm -f "${LOG_FILE}"
