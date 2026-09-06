@@ -231,6 +231,13 @@ LUKS_ALLOW_DISCARDS="no"
 # the pre-#25 behaviour. So drive the real screen function with a stubbed
 # dialog and assert on the variable it is supposed to produce.
 # TUI_NEXT/BACK/ABORT are readonly in lib/constants.sh — already sourced.
+#
+# DRY_RUN back to 1 first: the disk-planning section above left it at 0, and
+# _screen_luks_prompt then guards on `command -v cryptsetup`. On a machine
+# without cryptsetup the screen bails out before the TRIM question is ever
+# asked, and every assertion below silently tests the wrong branch — the
+# documented "test depends on the HOST's environment" trap.
+DRY_RUN=1
 TUI_DIR="${SCRIPT_DIR}/tui"
 source "${TUI_DIR}/filesystem_select.sh"
 
@@ -506,6 +513,11 @@ assert_eq "a substring match does not count as discard" "no" "${LUKS_ALLOW_DISCA
 rm -rf "${infer_root}"
 LUKS_ALLOW_DISCARDS="no"
 
+# Back to the disk-planning mode the sections below expect: _plan_luks_setup
+# skips the real cryptsetup steps under DRY_RUN=1, so leaving it on here would
+# make "the container is opened" assert against a plan that never opens it.
+DRY_RUN=0
+
 echo ""
 echo "=== Resume: an existing container is opened, never re-formatted ==="
 
@@ -573,11 +585,26 @@ out=$(validate_config 2>&1) && rc=0 || rc=$?
 assert_eq "bad LUKS_ENABLED rejected" "1" "${rc}"
 assert_contains "message names LUKS_ENABLED" "LUKS_ENABLED" "${out}"
 
+# LUKS_PARTITION is assigned by disk_plan_auto/disk_plan_dualboot, which run
+# AFTER every caller of validate_config — the summary screen included. So an
+# empty value before the disks phase is the normal state of a fresh encrypted
+# install, and demanding it here rejected every such install at the summary
+# with no way forward. The check now keys on the state that proves the plan
+# already ran: a mapper root.
 _valid_base
 LUKS_ENABLED="yes"
 LUKS_PARTITION=""
+ROOT_PARTITION=""
 out=$(validate_config 2>&1) && rc=0 || rc=$?
-assert_eq "LUKS without a container partition rejected" "1" "${rc}"
+assert_eq "a fresh LUKS install is not rejected before the disks phase" "0" "${rc}"
+
+_valid_base
+LUKS_ENABLED="yes"
+LUKS_PARTITION=""
+ROOT_PARTITION="/dev/mapper/cryptroot"
+out=$(validate_config 2>&1) && rc=0 || rc=$?
+assert_eq "LUKS with a mapper root but no container partition rejected" "1" "${rc}"
+assert_contains "message names LUKS_PARTITION" "LUKS_PARTITION" "${out}"
 
 _valid_base
 LUKS_ENABLED="no"

@@ -87,6 +87,13 @@ screen_progress() {
     local total=${#INSTALL_PHASES[@]}
     local i=0
 
+    # Pre-flight gate. FIRST statement on purpose: everything below this line
+    # can touch the disk (LUKS unlock, early mount, then the phases), and the
+    # entry points that reach screen_progress directly — `--install` and the
+    # inferred `--resume` — never pass the summary screen, so this is their
+    # only validation (Forgejo #27).
+    validate_config_gate
+
     # Mount filesystems early so checkpoint validation can inspect target disk
     # contents. Best-effort, but NOT silenced: a failure here (e.g. a stale or
     # wrong ROOT_PARTITION from an inferred --resume config) must be visible in

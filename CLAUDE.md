@@ -609,8 +609,37 @@ When dual-boot selected and not enough free space, `_shrink_wizard()` in `tui/di
 
 ### Config validation
 
-`validate_config()` in `lib/config.sh` — validates config BEFORE install. Called at entry to `screen_summary()`.
-Checks: required variables, enum values (KERNEL_TYPE ∈ {mainline, lts}, FILESYSTEM ∈ {ext4, btrfs, xfs}), hostname RFC 1123, block device existence, cross-field consistency.
+`validate_config()` in `lib/config.sh` — validates config BEFORE install.
+Checks: required variables, enum values (KERNEL_TYPE ∈ {mainline, lts, surface-patched},
+FILESYSTEM ∈ {ext4, btrfs, xfs}), hostname RFC 1123, block device existence, cross-field
+consistency.
+
+Two callers, and the second one is the one that matters: `screen_summary()`, and
+`validate_config_gate()` as the FIRST statement of `screen_progress()`. Until the
+gate landed, `--install` (config file straight to `screen_progress`) and the inferred
+`--resume` path reached the destructive phases with NOTHING checked (Forgejo #27).
+Non-interactively the gate dies; interactively it lists the errors and offers the
+wizard — the friendlier answer mid-recovery.
+
+Three things about it are load-bearing, each one a bug that reached `main` first:
+
+- **The gate runs BEFORE the LUKS container is unlocked**, because unlocking prompts
+  for a passphrase and touches the disk. So `/dev/mapper/<name>` cannot exist yet, and
+  testing it with `-b` turned every dual-boot+LUKS resume into a dead end. The raw
+  `LUKS_PARTITION` underneath is checked instead — it exists regardless of the
+  container's state, so a typo in a hand-edited preset is still caught.
+- **`LUKS_PARTITION` is assigned by `disk_plan_auto`/`disk_plan_dualboot`**, which run
+  from `disk_execute_plan` — after every caller of `validate_config`, the summary screen
+  included. Demanding it unconditionally rejected every fresh encrypted install AT THE
+  SUMMARY, with no way forward but hand-editing the config. The check now keys on
+  `ROOT_PARTITION` pointing at a mapper node, which proves the plan already ran.
+- **Relaxation keys on the CHECKPOINT, not on `MODE`** (`_validate_phase_pending`). A
+  field is demanded only while the phase consuming it is still ahead: accounts until
+  `users`, `GPU_VENDOR` until `desktop`, and so on. Keying on `MODE=resume` alone was
+  wrong in both directions — it waived account fields for a resume that crashed BEFORE
+  the users phase (a system nobody can log into), and it still demanded `GPU_VENDOR`,
+  which has no `_infer_*` at all, so every inferred resume was blocked. The gate
+  re-runs `detect_gpu()` for that one instead: same machine, reads only lspci/sysfs.
 
 ## Running tests
 
