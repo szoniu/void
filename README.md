@@ -2,9 +2,9 @@
 
 Interaktywny installer Void Linux z interfejsem TUI (gum/dialog). Przeprowadza za rękę przez cały proces instalacji — od partycjonowania dysku po działający desktop KDE Plasma. Po awarii: `./install.sh --resume` skanuje dyski i wznawia od ostatniego checkpointu.
 
-## Status (audyt 2026-05-17; sync z instalatorem Gentoo 2026-08-26)
+## Status (audyt 2026-05-17; sync z instalatorem Gentoo 2026-09-06)
 
-Rdzeń jest dojrzały i na parytecie z działającym instalatorem Gentoo. Pełny zestaw: 11 plików testowych (312 asercji) + `shellcheck` (57 plików czystych) — wszystko zielone.
+Rdzeń jest dojrzały i na parytecie z działającym instalatorem Gentoo. Pełny zestaw: 17 plików testowych (blisko 700 asercji) + `shellcheck` (65 plików czystych) — wszystko zielone.
 
 - ✅ **Instalacja na czystym dysku** (`scheme=auto`, x86_64) — bezpieczna.
 - ✅ **Dual-boot / shrink** — dodano twardą bramkę bezpieczeństwa (odmowa zmniejszenia poniżej zajętego miejsca + margines 1 GiB, dry-run NTFS) oraz odporne liczenie numeru partycji. Standardowe zalecenie kopii zapasowej przed dual-bootem nadal obowiązuje.
@@ -19,6 +19,8 @@ Rdzeń jest dojrzały i na parytecie z działającym instalatorem Gentoo. Pełny
 - ✅ **Naprawione zamrożone menu GRUB przy Secure Boot** — podpisany standalone dostaje stub przekierowujący zamiast wkompilowanego menu (wcześniej nowe kernele znikały z listy startowej).
 - ✅ **Tryb Wayland-only** — instalacja bez `xorg-server` (zostaje Xwayland dla apek X11). Na KDE greeter SDDM przełączany na Wayland; na GNOME GDM zastępowany przez greetd+tuigreet, bo sam GDM ciągnie Xorg.
 - ✅ **Szyfrowanie dysku (LUKS)** — kontener LUKS1 na partycji root, GRUB z `cryptodisk`, keyfile w initramfs (jedno pytanie o hasło zamiast dwóch). Hasło nigdy nie trafia do configu, logu ani do `ps`.
+- ✅ **TRIM na SSD** — runit nie ma `fstrim.timer`, więc instalator zakłada cotygodniowe zadanie `fstrim -av` (i otwiera bramkę anacrona „na baterii", inaczej na laptopie nigdy by nie ruszyło). Na zaszyfrowanym roocie TRIM jest **opt-in** — patrz sekcja o LUKS-ie.
+- ✅ **Czytelna czcionka konsoli** — na panelu HiDPI instalator proponuje `terminus-font` dobrany do rozdzielczości. Konsola tekstowa to dokładnie ten ekran, na którym lądujesz, gdy sesja graficzna nie wstaje.
 - ✅ **Intel Maki (pre-T2)** — GRUB na ścieżce removable, applespi w initramfs, wykrywanie macOS/APFS. T2 (2018+) jawnie niewspierane.
 
 Szczegóły napraw w `CLAUDE.md` → „Readiness status".
@@ -121,7 +123,7 @@ cd void
 >
 > **`Permission denied (publickey)`?** Użyj adresu HTTPS (jak wyżej), nie SSH (`git@github.com:...`). Live ISO nie ma Twoich kluczy SSH.
 
-Installer poprowadzi Cię przez 17 ekranów konfiguracji, a potem zainstaluje wszystko automatycznie.
+Installer poprowadzi Cię przez 17 ekranów konfiguracji (osiemnasty to już sama instalacja), a potem zainstaluje wszystko automatycznie.
 
 ### 5. Po instalacji
 
@@ -179,10 +181,10 @@ Logi instalacji zostają na dysku: `/var/log/void-installer.log` (faza chroot),
 | 3 | Hardware | Podgląd wykrytego CPU, GPU, dysków, peryferiali, zainstalowanych OS-ów (w tym Microsoft Surface i Secure Boot) |
 | 4 | WiFi | Pomijany, gdy sieć działa. Skan SSID + hasło; profil trafia też do instalowanego systemu |
 | 5 | Dysk | Wybór dysku + schemat (auto/dual-boot/manual) + shrink wizard |
-| 6 | Filesystem | ext4 / btrfs (ze subvolumes) / XFS + **szyfrowanie LUKS** |
+| 6 | Filesystem | ext4 / btrfs (ze subvolumes) / XFS + **szyfrowanie LUKS** (a przy nim pytanie o TRIM) |
 | 7 | Swap | zram (domyślnie) / partycja / plik / brak |
 | 8 | Sieć | Hostname + mirror Void |
-| 9 | Locale | Timezone, język, keymap |
+| 9 | Locale | Timezone, język, keymap + **czcionka konsoli** (propozycja pod rozdzielczość panelu) |
 | 10 | Kernel | mainline (rolling) / LTS (stabilny) / surface-patched (kompilowany ze źródeł, na Surface) |
 | 11 | Secure Boot | Opcjonalne podpisanie kernela i GRUB-a (MOK/shim). Tylko na EFI. |
 | 12 | GPU | Auto-wykryty sterownik + hybrid GPU (PRIME offload) + NVIDIA open |
@@ -204,6 +206,8 @@ Installer automatycznie wykrywa i konfiguruje:
 - **Intel Mac (MacBook/iMac, pre-T2)** — wykrywanie po DMI. GRUB ląduje także na ścieżce removable (`EFI/BOOT/BOOTX64.EFI`), bo firmware Apple gubi wpisy NVRAM; moduły SPI (`applespi`) trafiają do initramfs, inaczej po pierwszym boocie nie ma klawiatury; dokładany jest `broadcom-bt-firmware`. Partycje macOS (APFS/HFS+) są rozpoznawane po GPT GUID, więc tryb `auto` żąda wpisania `ERASE` zamiast po cichu wyczyścić dysk. Maki z **T2** (2018+) są jawnie niewspierane. Szczegóły: [`docs/macbook-apple.md`](docs/macbook-apple.md).
 - **Zasilanie laptopa** — po wykryciu baterii instalowany jest `power-profiles-daemon` (bez niego aplet zasilania w GNOME/KDE nie ma żadnych profili) oraz `thermald` na Intelu.
 - **Peryferiale** — 6 automatycznych detekcji: Bluetooth, czytnik linii papilarnych (fprintd + PAM config dla SDDM/KDE), Thunderbolt (bolt), czujniki IIO (iio-sensor-proxy), kamera, WWAN/LTE (ModemManager). Wykryte urządzenia pojawiają się jako opcje w ekranie pakietów.
+- **Panel HiDPI** — instalator czyta rozdzielczość wbudowanego ekranu i proponuje czcionkę konsoli z `terminus-font` (`ter-v20n` / `ter-v28n` / `ter-v32n`, dobrane po **dłuższej krawędzi** panelu — UMPC bywają natywnie portretowe). Poniżej 1920 px nie proponuje nic: fabryczna czcionka VGA jest wtedy w porządku, a zbędny pakiet to nie ulepszenie. Nazwa jest weryfikowana już w chroocie — `FONT=` wskazujące na nieistniejącą czcionkę zostawiłoby popsutą konsolę, czyli dokładnie tę awarię, przed którą ta opcja ma chronić.
+- **Dysk SSD** — runit nie ma `fstrim.timer`, więc na dysku nierotacyjnym instalator zakłada `/etc/cron.weekly/fstrim`. Anacron na Voidzie domyślnie **pomija zadania na baterii**, więc instalator otwiera też tę bramkę — inaczej na laptopie zadanie nie odpaliłoby się nigdy.
 
 ### Opcjonalne środowiska Wayland
 
@@ -278,6 +282,29 @@ szyfrowany jest **root**, ESP zostaje jawny (tak wymaga UEFI).
   w argumentach procesu. Dlatego `--resume` zapyta o nie ponownie.
 - **Nie ma odzyskiwania.** Zapomniane hasło = utracone dane.
 - Tryb partycjonowania `manual` nie jest wspierany — tam kontener zakładasz sam.
+
+### TRIM na zaszyfrowanym dysku (opt-in)
+
+Po pytaniu o szyfrowanie instalator pyta o **TRIM**, z kursorem na „No" — i tylko
+wtedy, gdy dysk docelowy nie jest talerzowy. Powód, dla którego to osobna decyzja:
+
+- dm-crypt **nie przepuszcza** discardu, dopóki mapping nie zostanie otwarty
+  z `allow-discards`. Bez tego cotygodniowy `fstrim` nie przycina na tym dysku
+  **niczego** poza ESP — a SSD z czasem zwalnia przy zapisie;
+- włączenie kosztuje: discard ujawnia **mapę zajętych bloków** przez warstwę
+  szyfrowania, więc widać, ile miejsca jest zajęte i mniej więcej gdzie (same dane
+  zostają zaszyfrowane). Dlatego cryptsetup ma to domyślnie wyłączone.
+
+Praktycznie: laptop, który wozisz ze sobą — włącz; sprzęt, który może trafić
+w obce ręce — zostaw wyłączony. Wybór widać w podsumowaniu przed fazą destrukcyjną,
+a po instalacji sprawdzisz go poleceniem:
+
+```bash
+dmsetup table cryptroot | grep allow_discards
+```
+
+Gdyby czegoś zabrakło, instalator zostawia gotowy przepis
+w `/root/POST-INSTALL-LUKS-TRIM.txt`.
 
 > **Laptop z klawiaturą na SPI** (MacBook 8,1/9,1/10,1, MacBook Pro 13/14):
 > pytanie o hasło leci z initramfs, więc klawiatura musi tam działać. Instalator
@@ -375,6 +402,17 @@ ps aux | grep -E "tee|xbps"
 
 ### Zdalna instalacja przez SSH
 
+> **Najpierw sieć, potem SSH.** Na maszynie bez portu Ethernet (MacBook 12",
+> ultrabook z samym USB-C) link trzeba podnieść **ręcznie na live ISO** — ekran
+> Wi-Fi instalatora jeszcze nie działa, bo instalatora jeszcze nie uruchomiłeś.
+> Na wariancie `xfce`: `nmcli device wifi connect 'SSID' password 'haslo'`
+> (albo aplet w tacce). Dopiero potem ma sens reszta tej sekcji.
+
+> **Czego SSH nie załatwi:** przy szyfrowanym roocie hasło do LUKS-a wpisujesz
+> **fizycznie na maszynie** przy pierwszym starcie — prompt GRUB-a leci na długo
+> przed jakąkolwiek siecią. Na MacBooku dochodzi do tego klawiatura na SPI, więc
+> miej pod ręką hub USB-C i klawiaturę USB.
+
 Na maszynie docelowej (bootowanej z Live ISO):
 
 ```bash
@@ -420,9 +458,9 @@ cd void
 - **`Permission denied (publickey)`** — Void domyślnie nie pozwala na logowanie root z hasłem. Dodaj `PermitRootLogin yes` do `/etc/ssh/sshd_config` i `sv restart sshd`.
 - **`Permission denied, please try again`** — hasło jest złe lub nie zostało ustawione. Uruchom `passwd root` ponownie na maszynie docelowej.
 
-#### Użyj tmux — ochrona przed zerwaniem sesji SSH
+#### Użyj multipleksera — ochrona przed zerwaniem sesji SSH
 
-**Ważne:** Jeśli połączenie SSH się zerwie, instalacja w zwykłej sesji zostanie przerwana. **Zawsze uruchamiaj installer w tmux:**
+**Ważne:** Jeśli połączenie SSH się zerwie, instalacja w zwykłej sesji zostanie przerwana. **Zawsze uruchamiaj installer w tmux** (albo w `zellij`, jeśli wolisz — `xbps-install -Sy zellij`, potem `zellij attach install`):
 
 ```bash
 # Na Live ISO (po połączeniu SSH):
