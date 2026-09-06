@@ -103,6 +103,17 @@ gdy wykryto sprzęt Apple. Instalator zapisuje też
 (smithay, nie wlroots) po cichu odrzuca FileChooser i okna wyboru pliku
 w GTK/Electronach nie pojawiają się wcale.
 
+### Czcionka konsoli
+
+Ta sama gęstość pikseli, która wymusza fractional scaling w GUI, robi z konsoli
+tekstowej mrowisko — a to jest dokładnie ten ekran, na którym lądujesz, gdy sesja
+graficzna nie wstaje. Instalator proponuje czcionkę na ekranie 9 (Locale), dobraną
+po dłuższej krawędzi panelu: 2304×1440 MacBooka 12" trafia w `ter-v20n`. Gdy kernel
+nie wystawia danych o panelu, sam fakt wykrycia sprzętu Apple wystarcza do
+propozycji `ter-v28n` — każdy Mac wspierany przez instalator ma ekran Retina.
+
+Zmiana po instalacji: `FONT=` w `/etc/rc.conf` (wymaga pakietu `terminus-font`).
+
 ### Fanless
 
 i5-7Y54 w MacBooku 12" nie ma wentylatora — throttling pod obciążeniem to norma, nie
@@ -140,6 +151,11 @@ instalator zostawia gotowy przepis w `/root/POST-INSTALL-LUKS-TRIM.txt`.
 
 1. macOS: Time Machine.
 2. macOS: `diskutil apfs resizeContainer …` — zostaw wolne miejsce.
+   **To tutaj decydujesz, ile dostanie Void.** Instalator nie pyta o rozmiar
+   partycji: w schemacie dual-boot robi `sfdisk --append` bez `size=`, więc nowa
+   partycja bierze **cały** wolny obszar dysku. Zostaw dokładnie tyle, ile ma mieć
+   Void (minimum, na które instalator się zgodzi, to 10 GiB), i **nie twórz tam
+   partycji** — ma zostać nieprzydzielone miejsce.
 3. Boot z pendrive'a Void: przytrzymaj **Option**, wybierz „EFI Boot".
 4. Instalator: schemat **dual-boot**, reuse istniejącego ESP Apple (zwykle `…p1`, 200 MiB).
 5. Po instalacji: jeśli Mac wstaje prosto w macOS — Option przy starcie, albo w macOS
