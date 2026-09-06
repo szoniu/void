@@ -150,12 +150,10 @@ instalator zostawia gotowy przepis w `/root/POST-INSTALL-LUKS-TRIM.txt`.
 ## Kolejność przy dual-boocie z macOS
 
 1. macOS: Time Machine.
-2. macOS: `diskutil apfs resizeContainer …` — zostaw wolne miejsce.
-   **To tutaj decydujesz, ile dostanie Void.** Instalator nie pyta o rozmiar
-   partycji: w schemacie dual-boot robi `sfdisk --append` bez `size=`, więc nowa
-   partycja bierze **cały** wolny obszar dysku. Zostaw dokładnie tyle, ile ma mieć
-   Void (minimum, na które instalator się zgodzi, to 10 GiB), i **nie twórz tam
-   partycji** — ma zostać nieprzydzielone miejsce.
+2. macOS: zrób miejsce — patrz przepis niżej. **To tutaj decydujesz, ile dostanie
+   Void.** Instalator nie pyta o rozmiar partycji: w schemacie dual-boot robi
+   `sfdisk --append` bez `size=`, więc nowa partycja bierze **cały** wolny obszar
+   dysku (minimum, na które instalator się zgodzi, to 10 GiB).
 3. Boot z pendrive'a Void: przytrzymaj **Option**, wybierz „EFI Boot".
 4. Instalator: schemat **dual-boot**, reuse istniejącego ESP Apple (zwykle `…p1`, 200 MiB).
 5. Po instalacji: jeśli Mac wstaje prosto w macOS — Option przy starcie, albo w macOS
@@ -163,6 +161,68 @@ instalator zostawia gotowy przepis w `/root/POST-INSTALL-LUKS-TRIM.txt`.
 
 **os-prober nie wykryje macOS** (APFS), więc wpisu macOS w menu GRUB nie będzie —
 przełączanie systemów odbywa się przez Startup Manager Apple.
+
+### Robienie miejsca w macOS — przepis
+
+Cel jest jeden: `diskutil list` ma na końcu pokazywać wiersz **`(free space)`**.
+Nie wolumin, nie partycję — **niezagospodarowany obszar GPT**. Instalator tworzy
+swoją partycję przez `sfdisk --append`, czyli właśnie w takim obszarze; wolumin
+APFS/HFS+ założony „na zapas" liczy się jako zajęte miejsce, a zmniejszyć APFS-a
+z Linuksa **nie da się w ogóle** — zostaje powrót do macOS i poprawianie.
+
+To jest też pułapka GUI: w Disk Utility przycisk „+" dodaje **wolumin**, nie wolną
+przestrzeń. Stąd terminal.
+
+**1. Zobacz układ dysku** — szukasz `Container diskN` i jego Physical Store
+(zwykle `disk0s2`, sam kontener to `disk1`):
+
+```
+diskutil list
+```
+
+**2. Sprawdź granice, ZANIM spróbujesz zmniejszać:**
+
+```
+diskutil apfs resizeContainer disk1 limits
+```
+
+Wypisuje minimalny i maksymalny rozmiar kontenera. Minimum wyraźnie wyższe od
+zajętych danych (np. 300 GB przy 80 GB plików) oznacza prawie na pewno lokalne
+snapshoty — patrz krok 4.
+
+**3. Zmniejsz kontener. Argument to NOWY rozmiar kontenera, czyli ile zostaje
+dla macOS** — reszta dysku staje się wolną przestrzenią:
+
+```
+diskutil apfs resizeContainer disk1 120g
+```
+
+**Nie dopisuj nic po rozmiarze.** Dalsze argumenty (`jhfs+`, nazwa, rozmiar) każą
+diskutilowi założyć w odzyskanym miejscu wolumin — czyli dokładnie to, czego ma
+tam nie być.
+
+**4. Gdy resize odmawia albo `limits` pokazuje absurdalne minimum** — lokalne
+snapshoty APFS. Time Machine robi je także bez podłączonego dysku zewnętrznego
+i trzymają bloki, których kontener nie może oddać:
+
+```
+tmutil listlocalsnapshots /
+```
+
+```
+sudo tmutil thinlocalsnapshots / 999999999999 4
+```
+
+Potem wróć do kroku 2 — minimum powinno spaść.
+
+**5. Zweryfikuj przed rebootem:**
+
+```
+diskutil list
+```
+
+Ma być `(free space)` o oczekiwanym rozmiarze. FileVault nie przeszkadza —
+zmniejszanie działa przy włączonym.
 
 ## Po instalacji: dotfiles
 
