@@ -55,6 +55,7 @@ echo "=== greetd session mapping ==="
 assert_eq "gnome-wayland -> gnome-session"  "gnome-session"       "$(_greetd_session_command gnome-wayland)"
 assert_eq "gnome -> gnome-session"          "gnome-session"       "$(_greetd_session_command gnome)"
 assert_eq "niri -> niri-session"            "niri-session"        "$(_greetd_session_command niri)"
+assert_eq "mango -> dbus-run-session mango" "dbus-run-session mango" "$(_greetd_session_command mango)"
 assert_eq "sway -> sway"                    "sway"                "$(_greetd_session_command sway)"
 assert_eq "plasma -> startplasma-wayland"   "startplasma-wayland" "$(_greetd_session_command plasma)"
 assert_eq "unknown falls through verbatim"  "hyprland"            "$(_greetd_session_command hyprland)"
@@ -141,6 +142,52 @@ for known in "${CONFIG_VARS[@]}"; do
     [[ "${known}" == "WAYLAND_ONLY" ]] && found=1 && break
 done
 assert_eq "WAYLAND_ONLY is in CONFIG_VARS" "1" "${found}"
+
+echo "=== Ekosystem mango ==="
+mango_session_fn=$(declare -f _mango_write_session_file)
+assert_true "sesja SDDM uruchamia mango z D-Bus" \
+    grep -q 'Exec=dbus-run-session mango' <<< "${mango_session_fn}"
+assert_true "sesja SDDM ma osobny plik" \
+    grep -q '/usr/share/wayland-sessions/mango-dbus.desktop' <<< "${mango_session_fn}"
+assert_true "instalacja mango zapisuje sesję SDDM" \
+    grep -q '_mango_write_session_file' <<< "$(declare -f install_mango_ecosystem)"
+
+_run_mango() (
+    ENABLE_MANGO="$1"
+    xbps-install() { printf 'xbps-install %s\n' "$*"; }
+    _mango_write_session_file() { :; }
+    install_mango_ecosystem
+)
+mango_out=$(_run_mango yes 2>&1)
+assert_true "mango włączone: instalacja mangowc w dry-run" \
+    grep -q 'Would execute: xbps-install -y mangowc' <<< "${mango_out}"
+for pkg in xorg-server-xwayland foot rofi Waybar mako swaylock swayidle swaybg grim slurp wl-clipboard brightnessctl xdg-desktop-portal-wlr xdg-desktop-portal-gtk; do
+    assert_true "mango włączone: pakiet ${pkg}" \
+        grep -qx "xbps-install -y ${pkg}" <<< "${mango_out}"
+done
+assert_false "mango nie instaluje xwayland-satellite" \
+    grep -q 'xwayland-satellite' <<< "${mango_out}"
+assert_eq "mango wyłączone: brak instalacji" "" "$(_run_mango no 2>&1)"
+
+echo "=== Ekran pakietów: mango ==="
+source "${SCRIPT_DIR}/tui/extra_packages.sh"
+# The checklist stub "returns" the given selection and records its arguments,
+# so the screen's own parsing, resets and exports run unchanged.
+_screen_with() (
+    local wybor="$1"
+    dialog_checklist() { printf '%s\n' "$@" > "${LOG_FILE}.args"; echo "${wybor}"; }
+    dialog_inputbox() { echo ""; }
+    screen_extra_packages > /dev/null 2>&1
+    echo "mango=${ENABLE_MANGO} niri=${ENABLE_NIRI} extra=${EXTRA_PACKAGES}"
+)
+assert_eq "wybór mango włącza ENABLE_MANGO" "mango=yes niri=no extra=" \
+    "$(ENABLE_MANGO=no ENABLE_NIRI=no _screen_with '"mango-ecosystem"')"
+assert_eq "ponowny wybór bez mango i niri zeruje oba" "mango=no niri=no extra=btop" \
+    "$(ENABLE_MANGO=yes ENABLE_NIRI=yes _screen_with '"btop"')"
+ENABLE_MANGO=yes _screen_with '"mango-ecosystem"' > /dev/null
+assert_eq "mango zaznaczone, gdy ENABLE_MANGO=yes" "on" \
+    "$(grep -A2 -x 'mango-ecosystem' "${LOG_FILE}.args" | tail -1)"
+rm -f "${LOG_FILE}.args"
 
 rm -f "${LOG_FILE}"
 

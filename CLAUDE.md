@@ -158,6 +158,7 @@ All config variables are defined in `CONFIG_VARS[]` in `lib/constants.sh`:
 | `LUKS_ALLOW_DISCARDS` | yes/no | Let TRIM through dm-crypt (opt-in — exposes the used-block map) |
 | `ENABLE_HYPRLAND` | yes/no | Install Hyprland ecosystem (standalone, niezależny od Noctalia) |
 | `ENABLE_NIRI` | yes/no | Install niri ecosystem (niri + xwayland-satellite + Waybar/fuzzel/mako) |
+| `ENABLE_MANGO` | yes/no | Install mango ecosystem (mangowc + xorg-server-xwayland + Waybar/rofi/foot/mako + portal wlr) |
 | `APPLE_DETECTED` | 0/1 | Apple hardware detected (DMI `Apple Inc.`) |
 | `APPLE_MODEL` | string | e.g. `MacBook10,1` |
 | `APPLE_T2_DETECTED` | 0/1 | T2 chip (2018+) — NOT supported |
@@ -437,6 +438,11 @@ chroota, a `install_network_manager()` instaluje do `/etc/NetworkManager/system-
 - **niri jest w oficjalnym repo** (razem z `xwayland-satellite`, `fuzzel`, `mako`,
   `swaylock`, `swayidle`, `Waybar`) — `install_niri_ecosystem()` w `lib/desktop.sh`,
   opcja `niri-ecosystem` w ekranie 13. Sesja niri działa obok GNOME/GDM.
+- **mango (`mangowc`) jest w oficjalnym repo** — `install_mango_ecosystem()` w `lib/desktop.sh`, opcja
+  `mango-ecosystem` w ekranie 13. Ma wbudowany Xwayland (bez `xwayland-satellite`) i własne
+  `mango-portals.conf` (ScreenCast przez wlr) — nie nadpisuj go jak przy niri. Sam nie zakłada magistrali
+  D-Bus: sesja SDDM to `mango-dbus.desktop` z `dbus-run-session mango` (własna nazwa, żeby aktualizacja
+  pakietu jej nie nadpisała), greetd mapuje `mango` tak samo w `_greetd_session_command`.
 
 #### Microsoft Surface support
 

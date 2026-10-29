@@ -390,6 +390,7 @@ _do_chroot_phases() {
         verify_wayland_only
         install_hyprland_ecosystem
         install_niri_ecosystem
+        install_mango_ecosystem
         install_noctalia_shell
         install_gaming
         install_fingerprint_tools
