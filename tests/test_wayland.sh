@@ -97,6 +97,8 @@ echo "=== greetd config ==="
 greetd_fn=$(declare -f _configure_greetd)
 assert_true "config lists Wayland sessions" \
     grep -q "/usr/share/wayland-sessions" <<< "${greetd_fn}"
+assert_true "multi-word session command stays one --cmd argument" \
+    grep -qF -- "--cmd '\${session_cmd}'" <<< "${greetd_fn}"
 assert_true "greeter runs as the unprivileged _greeter user" \
     grep -q 'user = "_greeter"' <<< "${greetd_fn}"
 

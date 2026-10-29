@@ -1338,6 +1338,8 @@ _configure_greetd() {
     # --remember keeps the last user; --time shows a clock. The session list
     # is read from /usr/share/wayland-sessions, so anything else the user
     # installs later (niri, sway) shows up without touching this file.
+    # greetd runs the command through sh, so a multi-word session command
+    # ("dbus-run-session mango") must stay one --cmd argument: keep the quotes.
     cat > /etc/greetd/config.toml << GREETDCONF
 # greetd — written by ${INSTALLER_NAME:-void-installer}
 # Wayland-only session management: no X server anywhere in the chain.
@@ -1346,7 +1348,7 @@ _configure_greetd() {
 vt = 7
 
 [default_session]
-command = "tuigreet --time --remember --sessions /usr/share/wayland-sessions --cmd ${session_cmd}"
+command = "tuigreet --time --remember --sessions /usr/share/wayland-sessions --cmd '${session_cmd}'"
 user = "_greeter"
 GREETDCONF
 
