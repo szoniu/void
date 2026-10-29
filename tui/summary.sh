@@ -46,6 +46,7 @@ screen_summary() {
     fi
     [[ "${ENABLE_HYPRLAND:-no}" == "yes" ]] && summary+="Hyprland:     ecosystem enabled\n"
     [[ "${ENABLE_NIRI:-no}" == "yes" ]] && summary+="niri:         ecosystem enabled\n"
+    [[ "${ENABLE_MANGO:-no}" == "yes" ]] && summary+="mango:        ecosystem enabled\n"
     [[ "${ENABLE_NOCTALIA:-no}" == "yes" ]] && summary+="Noctalia:     ${NOCTALIA_COMPOSITOR:-Hyprland} compositor\n"
     [[ "${ENABLE_GAMING:-no}" == "yes" ]] && summary+="Gaming:       Steam, gamescope, MangoHud\n"
     [[ "${ASUS_ROG_DETECTED:-0}" == "1" ]] && summary+="ASUS ROG:     detected\n"

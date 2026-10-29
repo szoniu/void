@@ -172,7 +172,7 @@ echo "=== Config plumbing ==="
 
 # The Apple flags must round-trip through config_save/config_load, otherwise
 # the chroot phase (a separate process) loses them.
-for var in APPLE_DETECTED APPLE_T2_DETECTED APPLE_MODEL APPLE_SPI_INPUT MACOS_DETECTED ENABLE_NIRI; do
+for var in APPLE_DETECTED APPLE_T2_DETECTED APPLE_MODEL APPLE_SPI_INPUT MACOS_DETECTED ENABLE_NIRI ENABLE_MANGO; do
     found=0
     for known in "${CONFIG_VARS[@]}"; do
         [[ "${known}" == "${var}" ]] && found=1 && break

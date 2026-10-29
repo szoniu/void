@@ -125,6 +125,14 @@ assert_false "dead noctalia repo is not written" \
     grep -q 'echo "repository=https://rxelelo' "${SCRIPT_DIR}/lib/desktop.sh"
 
 echo ""
+echo "=== Kolejność instalacji mango ==="
+mango_line=$(_line_of install.sh '^        install_mango_ecosystem$')
+niri_line=$(_line_of install.sh '^        install_niri_ecosystem$')
+verify_line=$(_line_of install.sh '^        verify_wayland_only$')
+assert_true "mango po weryfikacji Waylanda" test "${mango_line}" -gt "${verify_line}"
+assert_true "mango po niri" test "${mango_line}" -gt "${niri_line}"
+
+echo ""
 echo "=== Results ==="
 echo "Passed: ${PASS}"
 echo "Failed: ${FAIL}"

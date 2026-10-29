@@ -51,6 +51,7 @@ screen_extra_packages() {
     # niri ecosystem — scrollable-tiling Wayland session (all packages are in
     # official Void repos, unlike the Hyprland stack)
     checklist_args+=("niri-ecosystem" "niri + ekosystem (Waybar, fuzzel, mako, xwayland-satellite...)" "$( [[ "${ENABLE_NIRI:-no}" == "yes" ]] && echo "on" || echo "off" )")
+    checklist_args+=("mango-ecosystem" "mango + ekosystem (Waybar, rofi, foot, mako, portal wlr...)" "$( [[ "${ENABLE_MANGO:-no}" == "yes" ]] && echo "on" || echo "off" )")
 
     # Hyprland ecosystem — standalone Wayland desktop (needs a third-party repo)
     checklist_args+=("hyprland-ecosystem" "Hyprland + ekosystem (Waybar, wofi, mako, grim... — repo third-party)" "$( [[ "${ENABLE_HYPRLAND:-no}" == "yes" ]] && echo "on" || echo "off" )")
@@ -75,6 +76,8 @@ screen_extra_packages() {
     local -a pkgs=()
     ENABLE_NONFREE="no"
     ENABLE_HYPRLAND="no"
+    ENABLE_NIRI="no"
+    ENABLE_MANGO="no"
     ENABLE_NOCTALIA="no"
     ENABLE_GAMING="no"
     ENABLE_ASUSCTL="no"
@@ -114,6 +117,9 @@ screen_extra_packages() {
             niri-ecosystem)
                 ENABLE_NIRI="yes"
                 ;;
+            mango-ecosystem)
+                ENABLE_MANGO="yes"
+                ;;
             gaming)
                 ENABLE_GAMING="yes"
                 # Gaming requires nonfree repo (Steam)
@@ -137,7 +143,7 @@ screen_extra_packages() {
         esac
     done
 
-    export ENABLE_NONFREE ENABLE_HYPRLAND ENABLE_NIRI ENABLE_NOCTALIA ENABLE_GAMING \
+    export ENABLE_NONFREE ENABLE_HYPRLAND ENABLE_NIRI ENABLE_MANGO ENABLE_NOCTALIA ENABLE_GAMING \
            ENABLE_ASUSCTL ENABLE_FINGERPRINT ENABLE_THUNDERBOLT ENABLE_SENSORS ENABLE_WWAN \
            ENABLE_IPTSD
 
@@ -160,6 +166,7 @@ Leave empty to skip:" \
     [[ "${ENABLE_NONFREE}" == "yes" ]] && einfo "Nonfree repository: enabled"
     [[ "${ENABLE_HYPRLAND}" == "yes" ]] && einfo "Hyprland ecosystem: enabled"
     [[ "${ENABLE_NIRI:-no}" == "yes" ]] && einfo "niri ecosystem: enabled"
+    [[ "${ENABLE_MANGO:-no}" == "yes" ]] && einfo "mango ecosystem: enabled"
     [[ "${ENABLE_NOCTALIA}" == "yes" ]] && einfo "Noctalia Shell: enabled (compositor: ${NOCTALIA_COMPOSITOR:-Hyprland})"
     [[ "${ENABLE_GAMING}" == "yes" ]] && einfo "Gaming: enabled (Steam, gamescope, MangoHud)"
     [[ "${ENABLE_ASUSCTL}" == "yes" ]] && einfo "ASUS ROG tools: enabled"

@@ -1168,6 +1168,47 @@ install_niri_ecosystem() {
     einfo "niri ecosystem installed"
 }
 
+# install_mango_ecosystem — mango as a standalone wlroots session.
+# Built-in Xwayland needs no xwayland-satellite. Keep the package's portal
+# configuration: overriding it would disable ScreenCast through wlr.
+install_mango_ecosystem() {
+    if [[ "${ENABLE_MANGO:-no}" != "yes" ]]; then
+        return 0
+    fi
+
+    einfo "Installing mango ecosystem..."
+    try "Installing mango" xbps-install -y mangowc
+
+    local -a mango_pkgs=(
+        xorg-server-xwayland
+        foot rofi Waybar mako
+        swaylock swayidle swaybg
+        grim slurp wl-clipboard brightnessctl
+        xdg-desktop-portal-wlr xdg-desktop-portal-gtk
+    )
+
+    local pkg
+    for pkg in "${mango_pkgs[@]}"; do
+        xbps-install -y "${pkg}" 2>/dev/null || ewarn "Package '${pkg}' not available, skipping"
+    done
+
+    _mango_write_session_file
+    einfo "mango ecosystem installed"
+}
+
+_mango_write_session_file() {
+    mkdir -p /usr/share/wayland-sessions
+    cat > /usr/share/wayland-sessions/mango-dbus.desktop << 'EOF'
+[Desktop Entry]
+Name=Mango (D-Bus)
+Comment=mango z sesyjną magistralą D-Bus (Void, bez systemd)
+Exec=dbus-run-session mango
+Type=Application
+DesktopNames=mango;wlroots
+EOF
+    einfo "  mango D-Bus session written (/usr/share/wayland-sessions/mango-dbus.desktop)"
+}
+
 # _niri_write_portal_config — niri is smithay-based, not wlroots, and the
 # default portal chain silently drops FileChooser: "Open file/folder" dialogs
 # in GTK/Electron apps then never appear at all (no error, no window). Pin the
@@ -1273,6 +1314,7 @@ _greetd_session_command() {
     case "${1:-}" in
         gnome-wayland|gnome) echo "gnome-session" ;;
         niri)                echo "niri-session" ;;
+        mango)               echo "dbus-run-session mango" ;;
         sway)                echo "sway" ;;
         plasma|kde)          echo "startplasma-wayland" ;;
         *)                   echo "${1:-gnome-session}" ;;
@@ -1296,6 +1338,8 @@ _configure_greetd() {
     # --remember keeps the last user; --time shows a clock. The session list
     # is read from /usr/share/wayland-sessions, so anything else the user
     # installs later (niri, sway) shows up without touching this file.
+    # greetd runs the command through sh, so a multi-word session command
+    # ("dbus-run-session mango") must stay one --cmd argument: keep the quotes.
     cat > /etc/greetd/config.toml << GREETDCONF
 # greetd — written by ${INSTALLER_NAME:-void-installer}
 # Wayland-only session management: no X server anywhere in the chain.
@@ -1304,7 +1348,7 @@ _configure_greetd() {
 vt = 7
 
 [default_session]
-command = "tuigreet --time --remember --sessions /usr/share/wayland-sessions --cmd ${session_cmd}"
+command = "tuigreet --time --remember --sessions /usr/share/wayland-sessions --cmd '${session_cmd}'"
 user = "_greeter"
 GREETDCONF
 
