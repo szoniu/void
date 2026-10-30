@@ -645,6 +645,42 @@ for known in "${CONFIG_VARS[@]}"; do
 done
 assert_eq "no passphrase variable in CONFIG_VARS" "0" "${found}"
 
+echo ""
+echo "=== GRUB: cryptodisk configured before grub-install ==="
+# grub-install refuses an encrypted /boot unless /etc/default/grub already has
+# GRUB_ENABLE_CRYPTODISK=y, and _configure_grub is what writes it. Running it
+# after grub-install aborted the real NUC install (30.10.2026). The order is
+# asserted on behaviour: every step bootloader_install takes is recorded and
+# nothing real runs (FILESYSTEM=ext4 keeps the btrfs fix-up off the host's
+# /etc/default/grub; grub-install itself is stubbed for the Apple path).
+_bootloader_steps() {
+    (
+        source "${LIB_DIR}/bootloader.sh"
+        _steps=()
+        try() { _steps+=("try:$1"); }
+        grub-install() { _steps+=("grub-install-direct"); }
+        _configure_grub() { _steps+=("configure_grub"); }
+        _mount_other_oses_for_osprober() { :; }
+        _verify_grub_config() { :; }
+        _unmount_osprober_mounts() { :; }
+        _verify_efi_entries() { :; }
+        FILESYSTEM=ext4 WINDOWS_DETECTED=0 LINUX_DETECTED=0 ESP_REUSE=no APPLE_DETECTED="$1"
+        bootloader_install >/dev/null 2>&1
+        printf '%s\n' "${_steps[@]}"
+    )
+}
+for _apple in 0 1; do
+    _order=$(_bootloader_steps "${_apple}")
+    _conf=$(grep -n '^configure_grub$' <<< "${_order}" | cut -d: -f1 || true)
+    _inst=$(grep -n '^try:Installing GRUB to ESP' <<< "${_order}" | head -1 | cut -d: -f1 || true)
+    assert_eq "APPLE_DETECTED=${_apple}: GRUB is configured once" \
+        "1" "$(grep -c '^configure_grub$' <<< "${_order}" || true)"
+    assert_eq "APPLE_DETECTED=${_apple}: grub-install runs" \
+        "yes" "$([[ -n "${_inst}" ]] && echo yes || echo no)"
+    assert_eq "APPLE_DETECTED=${_apple}: GRUB is configured BEFORE grub-install" \
+        "yes" "$([[ -n "${_conf}" && -n "${_inst}" && "${_conf}" -lt "${_inst}" ]] && echo yes || echo no)"
+done
+
 rm -f "${LOG_FILE}"
 
 echo ""
