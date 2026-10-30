@@ -17,7 +17,7 @@ screen_summary() {
     summary+="Target disk:  ${TARGET_DISK:-?}\n"
     summary+="Partitioning: ${PARTITION_SCHEME:-auto}\n"
     summary+="Filesystem:   ${FILESYSTEM:-ext4}\n"
-    [[ "${FILESYSTEM}" == "btrfs" ]] && summary+="Subvolumes:   ${BTRFS_SUBVOLUMES:-default}\n"
+    [[ "${FILESYSTEM}" == "btrfs" ]] && summary+="Subvolumes:   ${BTRFS_SUBVOLUMES:-none}\n"
     summary+="Swap:         ${SWAP_TYPE:-zram}"
     [[ -n "${SWAP_SIZE_MIB:-}" ]] && summary+=" (${SWAP_SIZE_MIB} MiB)"
     summary+="\n"

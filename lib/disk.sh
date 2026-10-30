@@ -667,6 +667,11 @@ _wait_for_planned_partitions() {
     for _part in "${ESP_PARTITION:-}" "${BOOT_PARTITION:-}" "${ROOT_PARTITION:-}" \
                  "${SWAP_PARTITION:-}" "${LUKS_PARTITION:-}"; do
         [[ -z "${_part}" ]] && continue
+        # With LUKS, ROOT_PARTITION is /dev/mapper/<name>: cryptsetup creates it
+        # later in this same plan, so right after sfdisk it cannot exist yet and
+        # waiting for it killed every encrypted install. The partition behind
+        # the container is LUKS_PARTITION, which is waited for like any other.
+        [[ "${_part}" == /dev/mapper/* ]] && continue
         wait_for_block_device "${_part}" && continue
 
         # Dual-boot is the one case where a missing node is expected rather

@@ -84,8 +84,31 @@ assert_eq "Round-trip HOSTNAME" "new-host" "${HOSTNAME:-}"
 assert_eq "Round-trip EXTRA_PACKAGES" "pkg with spaces" "${EXTRA_PACKAGES:-}"
 assert_eq "Round-trip BTRFS_SUBVOLUMES" "@:/:@home:/home" "${BTRFS_SUBVOLUMES:-}"
 
+# A btrfs config without a layout (hand-written preset, or a config saved after
+# the preset skip jumped over the filesystem screen) must get the default one —
+# otherwise nothing is created and `mount -o subvol=@` fails right after mkfs
+# (real NUC install, 30.10.2026). An explicit empty layout is a choice and stays.
+echo ""
+echo "=== Test: btrfs layout fallback in config_load ==="
+TMPFILE3="/tmp/void-test-config-layout-$$.conf"
+printf "%s\n" "FILESYSTEM='btrfs'" "HOSTNAME='layout-host'" > "${TMPFILE3}"
+unset FILESYSTEM BTRFS_SUBVOLUMES
+config_load "${TMPFILE3}"
+assert_eq "btrfs without a layout gets the default one" \
+    "@:/:@home:/home:@var-log:/var/log:@snapshots:/.snapshots" "${BTRFS_SUBVOLUMES:-}"
+
+printf "%s\n" "FILESYSTEM='btrfs'" "BTRFS_SUBVOLUMES=''" > "${TMPFILE3}"
+unset FILESYSTEM BTRFS_SUBVOLUMES
+config_load "${TMPFILE3}"
+assert_eq "explicit empty layout is kept" "set-empty" "${BTRFS_SUBVOLUMES+set}-${BTRFS_SUBVOLUMES:-empty}"
+
+printf "%s\n" "FILESYSTEM='ext4'" > "${TMPFILE3}"
+unset FILESYSTEM BTRFS_SUBVOLUMES
+config_load "${TMPFILE3}"
+assert_eq "ext4 gets no btrfs layout" "unset" "${BTRFS_SUBVOLUMES-unset}"
+
 # Cleanup
-rm -f "${TMPFILE}" "${TMPFILE2}" "${LOG_FILE}"
+rm -f "${TMPFILE}" "${TMPFILE2}" "${TMPFILE3}" "${LOG_FILE}"
 
 echo ""
 echo "=== Results ==="

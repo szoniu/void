@@ -14,7 +14,7 @@ screen_filesystem_select() {
 
             # For btrfs, ask about subvolumes even in manual mode
             if [[ "${FILESYSTEM}" == "btrfs" ]]; then
-                BTRFS_SUBVOLUMES="@:/:@home:/home:@var-log:/var/log:@snapshots:/.snapshots"
+                BTRFS_SUBVOLUMES="${BTRFS_DEFAULT_SUBVOLUMES}"
 
                 dialog_yesno "Btrfs Subvolumes" \
                     "Detected btrfs on ${ROOT_PARTITION}.\n\n\
@@ -59,7 +59,7 @@ Select No to skip subvolume creation." && {
 
     # Btrfs subvolumes configuration
     if [[ "${FILESYSTEM}" == "btrfs" ]]; then
-        BTRFS_SUBVOLUMES="@:/:@home:/home:@var-log:/var/log:@snapshots:/.snapshots"
+        BTRFS_SUBVOLUMES="${BTRFS_DEFAULT_SUBVOLUMES}"
 
         dialog_yesno "Btrfs Subvolumes" \
             "The following btrfs subvolumes will be created:\n\n\
