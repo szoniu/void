@@ -25,6 +25,10 @@ readonly ROOTFS_BASE_URL="${VOID_REPO_BASE}/live/current"
 readonly ROOTFS_FILENAME_PATTERN="void-x86_64-ROOTFS-*.tar.xz"
 readonly ROOTFS_SHA256_URL="${ROOTFS_BASE_URL}/sha256sum.txt"
 
+# Default btrfs layout (name:mountpoint pairs) — the filesystem screen offers it
+# and config_load falls back to it when a btrfs config never set one.
+readonly BTRFS_DEFAULT_SUBVOLUMES="@:/:@home:/home:@var-log:/var/log:@snapshots:/.snapshots"
+
 # Partition sizes (MiB)
 readonly ESP_SIZE_MIB=512
 readonly SWAP_DEFAULT_SIZE_MIB=4096

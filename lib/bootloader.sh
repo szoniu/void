@@ -18,6 +18,13 @@ bootloader_install() {
     # Install efibootmgr for EFI entry management
     try "Installing efibootmgr" xbps-install -y efibootmgr
 
+    # Configure GRUB BEFORE grub-install: with LUKS, /boot is on the encrypted
+    # root and grub-install refuses to run ("attempt to install to encrypted
+    # disk without cryptodisk enabled") unless /etc/default/grub already has
+    # GRUB_ENABLE_CRYPTODISK=y — which _configure_grub is what writes. The
+    # reverse order aborted the real NUC install (30.10.2026).
+    _configure_grub
+
     # Install GRUB to ESP
     local grub_target="/boot/efi"
     local grub_id="Void"
@@ -41,9 +48,6 @@ bootloader_install() {
             grub-install --target=x86_64-efi --efi-directory="${grub_target}" \
             --bootloader-id="${grub_id}" --recheck
     fi
-
-    # Configure GRUB
-    _configure_grub
 
     # Mount other OS partitions so os-prober can find them
     _mount_other_oses_for_osprober

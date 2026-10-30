@@ -80,6 +80,18 @@ config_load() {
     source "${safe_file}"
     rm -f "${safe_file}"
 
+    # A btrfs config that never set a layout (a hand-written preset, or one saved
+    # after the preset skip jumped over the filesystem screen) would otherwise
+    # reach mount_filesystems with no subvolumes: nothing gets created and
+    # `mount -o subvol=@` fails right after mkfs. Unset means "never chosen", so
+    # take the default the screen offers; an explicit empty value (the user
+    # declined subvolumes) is kept.
+    if [[ "${FILESYSTEM:-}" == "btrfs" && -z "${BTRFS_SUBVOLUMES+x}" ]]; then
+        BTRFS_SUBVOLUMES="${BTRFS_DEFAULT_SUBVOLUMES}"
+        export BTRFS_SUBVOLUMES
+        einfo "No btrfs subvolume layout in ${file} — using the default"
+    fi
+
     einfo "Configuration loaded from ${file}"
 }
 

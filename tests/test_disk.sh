@@ -227,6 +227,28 @@ _MISSING_DEV=/dev/sda1
 out=$(_wait_for_planned_partitions 2>&1) || true
 assert_contains "dual-boot exception does NOT extend to the ESP" "DIED:" "${out}"
 
+# LUKS on auto: the paths come from the real planner, not hand-set values —
+# the hand-set ones above (ROOT=/dev/sda3 next to LUKS=/dev/sda5) are a layout
+# the planner never produces. With LUKS it points ROOT_PARTITION at the
+# device-mapper node, which cryptsetup opens several actions AFTER the wait
+# that follows sfdisk; waiting for it there aborted every encrypted install
+# (real NUC, 30.10.2026). The raw partition behind it must still be waited on.
+TARGET_DISK=/dev/nvme0n1 FILESYSTEM=btrfs SWAP_TYPE=zram LUKS_ENABLED=yes PARTITION_SCHEME=auto
+ESP_PARTITION="" BOOT_PARTITION="" ROOT_PARTITION="" SWAP_PARTITION="" LUKS_PARTITION=""
+DISK_ACTIONS=()
+disk_plan_auto >/dev/null 2>&1
+assert_eq "LUKS plan: root is the device-mapper node" "/dev/mapper/cryptroot" "${ROOT_PARTITION}"
+assert_eq "LUKS plan: the container sits on the second partition" "/dev/nvme0n1p2" "${LUKS_PARTITION}"
+_MISSING_DEV=/dev/mapper/cryptroot
+out=$(_wait_for_planned_partitions 2>&1) || true
+assert_true "LUKS plan: the not-yet-open container does not abort the wait" \
+    test -z "$(grep -o 'DIED:' <<< "${out}" || true)"
+_waited=()
+_wait_for_planned_partitions >/dev/null 2>&1 || true
+assert_eq "LUKS plan: waits for ESP and the raw LUKS partition only" \
+    "/dev/nvme0n1p1 /dev/nvme0n1p2" "${_waited[*]}"
+LUKS_ENABLED=no DISK_ACTIONS=()
+
 unset -f wait_for_block_device die
 _MISSING_DEV=""
 
